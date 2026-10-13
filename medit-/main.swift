@@ -42,7 +42,7 @@ final class LineGutter: NSView {
     }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NSWindowDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NSWindowDelegate, NSMenuItemValidation, NSMenuDelegate {
     var window: NSWindow!
     let editor = BlockTextView()
     let tabs = NSView()
@@ -53,16 +53,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
     var undoManagers: [UUID: UndoManager] = [:]
     let language = NSTextField(labelWithString: "Plain Text")
     var recoveryTimer: Timer?
+    var gitTimer: Timer?
     var settingsWindow: NSWindow?
     var workspace: String?
-    var workspaceFile: URL?
     var workspaceSaveError = false
-    let workspaceStore = WorkspaceStore()
     let sidebarController = FolderSidebarController()
     let workspaceSplit = WorkspaceSplitViewController()
     var sidebarItem: NSSplitViewItem!
     var sidebarWidth: CGFloat = 240
-    let store = RecoveryStore()
+    var store = RecoveryStore()
+    var folderStore = FolderSessionStore()
+    var windowClosed = false
+    var chooseSaveLocation: ((EditorDocument) -> URL?)?
+    var additionalWindows: [AppDelegate] = []
     let syntaxHighlighter: Highlighter? = {
         let engine = Highlighter(); _ = engine?.setTheme("atom-one-light"); return engine
     }()
@@ -71,6 +74,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
     let documentHost = NSView()
     var interfaceFont: NSFont { NSFont(name: UserDefaults.standard.string(forKey: "interfaceFont") ?? "Cantarell", size: CGFloat(UserDefaults.standard.double(forKey: "interfaceSize").nonzero(17))) ?? NSFont.systemFont(ofSize: CGFloat(UserDefaults.standard.double(forKey: "interfaceSize").nonzero(17))) }
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if self === delegate, let flag = CommandLine.arguments.firstIndex(of: "--session-directory"), CommandLine.arguments.indices.contains(flag + 1) {
+            store = RecoveryStore(directory: URL(fileURLWithPath: CommandLine.arguments[flag + 1]))
+            folderStore = FolderSessionStore(directory: store.directory)
+        }
+        folderStore.looseDirectory = store.directory.appendingPathComponent("Loose Documents")
         NSApp.appearance = NSAppearance(named: .aqua)
         if let url = Bundle.main.url(forResource: "AppIcon", withExtension: "icns"), let icon = NSImage(contentsOf: url) { NSApp.applicationIconImage = icon }
         buildMenu()
@@ -78,18 +86,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         window.delegate = self; window.setFrameAutosaveName("MainWindow"); window.title = "medit-"; window.titlebarAppearsTransparent = true; window.backgroundColor = EditorPalette.titleBar; window.minSize = NSSize(width: 640, height: 400)
         let rootController = NSViewController(); let root = NSView(frame: NSRect(x: 0, y: 0, width: 1060, height: 720)); rootController.view = root; window.contentViewController = rootController
         let header = NSView(); header.wantsLayer = true; header.layer?.backgroundColor = EditorPalette.header.cgColor
-        let open = button("Open", symbol: "folder"); let arrow = button("", symbol: "chevron.down"); let new = button("", symbol: "doc.badge.plus")
+        let open = button("Open", symbol: "folder"); let arrow = button("", symbol: "chevron.down"); let new = button("", symbol: "doc.badge.plus"); new.toolTip = "New Tab"; new.setAccessibilityLabel("New Tab")
         let save = button("Save", symbol: "square.and.arrow.down"); let menu = button("", symbol: "line.3.horizontal")
-        let sidebarToggle = button("", symbol: "sidebar.left"); sidebarToggle.target = self; sidebarToggle.action = #selector(toggleWorkspaceSidebar); sidebarToggle.toolTip = "Show or hide workspace sidebar"
-        let left = NSStackView(views: [open, arrow, new, sidebarToggle]); left.spacing = 8
-        let right = NSStackView(views: [save, menu]); right.spacing = 12
+        let sidebarToggle = button("", symbol: "sidebar.left"); sidebarToggle.target = self; sidebarToggle.action = #selector(toggleWorkspaceSidebar); sidebarToggle.toolTip = "Show/Hide Sidebar"
+        let openGroup = NSStackView(views: [open, arrow]); openGroup.spacing = 0
+        let left = NSStackView(views: [openGroup, sidebarToggle, new]); left.spacing = 8
+        let saveArrow = button("", symbol: "chevron.down"); saveArrow.toolTip = "Save options"; saveArrow.target = self; saveArrow.action = #selector(showSaveMenu(_:))
+        let saveGroup = NSStackView(views: [save, saveArrow]); saveGroup.spacing = 0
+        let right = NSStackView(views: [saveGroup, menu]); right.spacing = 12
         [left, right].forEach { header.addSubview($0); $0.translatesAutoresizingMaskIntoConstraints = false }
-        tabs.wantsLayer = true; tabs.layer?.backgroundColor = EditorPalette.inactiveTab.cgColor
-        let tabScroll = NSScrollView(); tabScroll.hasHorizontalScroller = true; tabScroll.autohidesScrollers = true; tabScroll.drawsBackground = false
-        tabItems.orientation = .horizontal; tabItems.spacing = 0; tabItems.alignment = .centerY
+        tabs.wantsLayer = true; tabs.layer?.backgroundColor = EditorPalette.sides.cgColor
+        let tabScroll = NSScrollView(); tabScroll.hasHorizontalScroller = true; tabScroll.scrollerStyle = .legacy; tabScroll.autohidesScrollers = true; tabScroll.drawsBackground = false
+        tabItems.orientation = .horizontal; tabItems.spacing = 2; tabItems.alignment = .centerY
         tabScroll.documentView = tabItems; tabs.addSubview(tabScroll); tabScroll.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([tabScroll.leadingAnchor.constraint(equalTo: tabs.leadingAnchor), tabScroll.trailingAnchor.constraint(equalTo: tabs.trailingAnchor), tabScroll.topAnchor.constraint(equalTo: tabs.topAnchor), tabScroll.bottomAnchor.constraint(equalTo: tabs.bottomAnchor)])
-        open.target = self; open.action = #selector(openDocuments); arrow.target = self; arrow.action = #selector(showWorkspaceMenu(_:))
+        open.target = self; open.action = #selector(showWorkspaceMenu(_:)); arrow.target = self; arrow.action = #selector(showWorkspaceMenu(_:))
         new.target = self; new.action = #selector(newDocument); save.target = self; save.action = #selector(saveDocument)
         menu.target = self; menu.action = #selector(showAppMenu)
         let scroll = NSScrollView(); scroll.hasVerticalScroller = true; scroll.hasHorizontalScroller = true; scroll.autohidesScrollers = true; scroll.drawsBackground = true; scroll.backgroundColor = .white
@@ -113,6 +124,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         let editorPane = NSView()
         [tabs, documentHost].forEach { editorPane.addSubview($0); $0.translatesAutoresizingMaskIntoConstraints = false }
         let editorController = NSViewController(); editorController.view = editorPane
+        sidebarController.onHide = { [weak self] in self?.toggleWorkspaceSidebar() }
         sidebarController.onOpenFile = { [weak self] url in self?.openFile(url) }
         sidebarItem = NSSplitViewItem(viewController: sidebarController)
         sidebarItem.minimumThickness = 160; sidebarItem.maximumThickness = CGFloat.greatestFiniteMagnitude; sidebarItem.canCollapse = true
@@ -125,7 +137,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
             header.topAnchor.constraint(equalTo: root.topAnchor), header.leadingAnchor.constraint(equalTo: root.leadingAnchor), header.trailingAnchor.constraint(equalTo: root.trailingAnchor), header.heightAnchor.constraint(equalToConstant: 62),
             left.leadingAnchor.constraint(equalTo: header.leadingAnchor, constant: 16), left.centerYAnchor.constraint(equalTo: header.centerYAnchor), right.trailingAnchor.constraint(equalTo: header.trailingAnchor, constant: -16), right.centerYAnchor.constraint(equalTo: header.centerYAnchor),
             workspaceSplit.view.topAnchor.constraint(equalTo: header.bottomAnchor), workspaceSplit.view.leadingAnchor.constraint(equalTo: root.leadingAnchor), workspaceSplit.view.trailingAnchor.constraint(equalTo: root.trailingAnchor), workspaceSplit.view.bottomAnchor.constraint(equalTo: status.topAnchor),
-            tabs.topAnchor.constraint(equalTo: editorPane.topAnchor), tabs.leadingAnchor.constraint(equalTo: editorPane.leadingAnchor), tabs.trailingAnchor.constraint(equalTo: editorPane.trailingAnchor), tabs.heightAnchor.constraint(equalToConstant: 48),
+            tabs.topAnchor.constraint(equalTo: editorPane.topAnchor), tabs.leadingAnchor.constraint(equalTo: editorPane.leadingAnchor), tabs.trailingAnchor.constraint(equalTo: editorPane.trailingAnchor), tabs.heightAnchor.constraint(equalToConstant: 39 + NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy)),
             documentHost.topAnchor.constraint(equalTo: tabs.bottomAnchor), documentHost.leadingAnchor.constraint(equalTo: editorPane.leadingAnchor), documentHost.trailingAnchor.constraint(equalTo: editorPane.trailingAnchor), documentHost.bottomAnchor.constraint(equalTo: editorPane.bottomAnchor),
             gutterScroll.leadingAnchor.constraint(equalTo: documentHost.leadingAnchor), gutterScroll.topAnchor.constraint(equalTo: documentHost.topAnchor), gutterScroll.bottomAnchor.constraint(equalTo: documentHost.bottomAnchor), gutterScroll.widthAnchor.constraint(equalToConstant: 54),
             scroll.leadingAnchor.constraint(equalTo: gutterScroll.trailingAnchor), scroll.trailingAnchor.constraint(equalTo: documentHost.trailingAnchor), scroll.topAnchor.constraint(equalTo: documentHost.topAnchor), scroll.bottomAnchor.constraint(equalTo: documentHost.bottomAnchor),
@@ -134,9 +146,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         if !window.setFrameUsingName("MainWindow") { window.center() }; window.makeKeyAndOrderFront(nil); window.makeFirstResponder(editor); NSApp.activate(ignoringOtherApps: true)
         restoreSession()
         applyFonts()
+        gitTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in self?.sidebarController.refreshGitStatus() }
         recoveryTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.persistSession() }
         refresh()
+        if self === delegate, !CommandLine.arguments.contains("--self-test"),
+           let data = try? Data(contentsOf: store.directory.appendingPathComponent("windows.json")),
+           let paths = try? JSONDecoder().decode([String].self, from: data) {
+            for path in paths {
+                let child = AppDelegate(); child.store = RecoveryStore(directory: URL(fileURLWithPath: path))
+                additionalWindows.append(child)
+                child.applicationDidFinishLaunching(notification)
+            }
+        }
     }
+    func windowDidBecomeKey(_ notification: Notification) { buildMenu() }
     func button(_ title: String, symbol: String) -> NSButton {
         let b = NSButton(title: title, target: nil, action: nil); b.font = interfaceFont; b.bezelStyle = .rounded
         b.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title.isEmpty ? symbol : title); b.imagePosition = title.isEmpty ? .imageOnly : .imageLeading
@@ -158,22 +181,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         for (title, action, key) in [("Cut", "cut:", "x"), ("Copy", "copy:", "c"), ("Paste", "paste:", "v"), ("Select All", "selectAll:", "a")] { edit.addItem(withTitle: title, action: Selector(action), keyEquivalent: key) }
         let undo = edit.insertItem(withTitle: "Undo", action: #selector(undoEdit), keyEquivalent: "z", at: 0); undo.target = self
         let redo = edit.insertItem(withTitle: "Redo", action: #selector(redoEdit), keyEquivalent: "z", at: 1); redo.target = self; redo.keyEquivalentModifierMask = [.command, .shift]
-        appMenu.insertItem(withTitle: "About medit-", action: #selector(showAbout), keyEquivalent: "", at: 0)
+        appMenu.insertItem(withTitle: "About medit-", action: #selector(showAbout), keyEquivalent: "", at: 0).target = self
         appMenu.insertItem(withTitle: "Hide medit-", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h", at: 1)
         let hideOthers = appMenu.insertItem(withTitle: "Hide Others", action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h", at: 2); hideOthers.keyEquivalentModifierMask = [.command, .option]
         appMenu.insertItem(withTitle: "Show All", action: #selector(NSApplication.unhideAllApplications(_:)), keyEquivalent: "", at: 3)
-        appMenu.insertItem(withTitle: "Settings…", action: #selector(showSettings), keyEquivalent: ",", at: 0)
+        appMenu.insertItem(withTitle: "Preferences…", action: #selector(showSettings), keyEquivalent: ",", at: 0).target = self
+        appMenu.addItem(withTitle: "Restore Closed Tab…", action: #selector(restoreClosedTab), keyEquivalent: "").target = self
         let fileItem = NSMenuItem(title: "File", action: nil, keyEquivalent: ""); main.insertItem(fileItem, at: 1)
         let file = NSMenu(title: "File"); fileItem.submenu = file
-        for (title, action, key) in [("New Tab", #selector(newDocument), "n"), ("Open…", #selector(openDocuments), "o"), ("Open Folder…", #selector(openWorkspace), ""), ("Open Workspace…", #selector(openNamedWorkspace), ""), ("Save Workspace As…", #selector(saveWorkspaceAs), ""), ("Save", #selector(saveDocument), "s"), ("Save As…", #selector(saveAsDocument), ""), ("Close Tab", #selector(closeActiveTab), "w")] { let item = file.addItem(withTitle: title, action: action, keyEquivalent: key); item.target = self }
+        for (title, action, key) in [("New File", #selector(newDocument), "n"), ("New Window", #selector(newWindow), ""), ("Open…", #selector(openDocuments), "o"), ("Save", #selector(saveDocument), "s"), ("Save As…", #selector(saveAsDocument), ""), ("Save All", #selector(saveAllDocuments), ""), ("Close File", #selector(closeActiveTab), "w"), ("Close Folder", #selector(closeFolder), "")] { let item = file.addItem(withTitle: title, action: action, keyEquivalent: key); item.target = self }
+        let recentItem = file.insertItem(withTitle: "Open Recent", action: nil, keyEquivalent: "", at: 3)
+        let recent = NSMenu(); recent.delegate = self; fillRecentMenu(recent); recentItem.submenu = recent
         let find = edit.addItem(withTitle: "Find and Replace…", action: #selector(NSTextView.performFindPanelAction(_:)), keyEquivalent: "f"); find.tag = Int(NSFindPanelAction.showFindPanel.rawValue)
         let next = edit.addItem(withTitle: "Find Next", action: #selector(NSTextView.performFindPanelAction(_:)), keyEquivalent: "g"); next.tag = Int(NSFindPanelAction.next.rawValue)
         let viewItem = NSMenuItem(title: "View", action: nil, keyEquivalent: ""); main.addItem(viewItem); let view = NSMenu(title: "View"); viewItem.submenu = view
-        view.addItem(withTitle: "Show/Hide Workspace Sidebar", action: #selector(toggleWorkspaceSidebar), keyEquivalent: "").target = self
-        view.addItem(withTitle: "Refresh Workspace", action: #selector(refreshWorkspaceSidebar), keyEquivalent: "").target = self
+        view.addItem(withTitle: "Show/Hide Sidebar", action: #selector(toggleWorkspaceSidebar), keyEquivalent: "").target = self
+        view.addItem(withTitle: "Refresh Folder", action: #selector(refreshWorkspaceSidebar), keyEquivalent: "").target = self
         view.addItem(withTitle: "Next Tab", action: #selector(nextTab), keyEquivalent: "").target = self
         view.addItem(withTitle: "Previous Tab", action: #selector(previousTab), keyEquivalent: "").target = self
-        view.addItem(withTitle: "Settings…", action: #selector(showSettings), keyEquivalent: "").target = self
+        view.addItem(withTitle: "Preferences…", action: #selector(showSettings), keyEquivalent: "").target = self
         let windowItem = NSMenuItem(title: "Window", action: nil, keyEquivalent: ""); main.addItem(windowItem)
         let windows = NSMenu(title: "Window"); windowItem.submenu = windows; NSApp.windowsMenu = windows
         windows.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")

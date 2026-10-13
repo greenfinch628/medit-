@@ -7,6 +7,10 @@ func runSelfTests() {
         guard condition() else { fatalError("FAIL: \(message)") }
         checks += 1; print("PASS: \(message)")
     }
+    let oldGitPreference = UserDefaults.standard.object(forKey: "showGitStatus")
+    defer { UserDefaults.standard.set(oldGitPreference, forKey: "showGitStatus") }
+    let oldRecent = UserDefaults.standard.object(forKey: "recentItems")
+    defer { UserDefaults.standard.set(oldRecent, forKey: "recentItems") }
     do {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("medit-tests-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: folder) }
@@ -17,7 +21,7 @@ func runSelfTests() {
         let restored = try store.load()!
         check(restored.documents[0].text == docs[0].text, "Unicode untitled recovery")
         check(restored.documents[1].dirty && restored.documents[1].savedText == "let x = 1", "Modified file recovery remains unsaved")
-        check(restored.activeIndex == 1 && restored.workspace == "/tmp/workspace", "Active tab and workspace restoration")
+        check(restored.activeIndex == 1 && restored.workspace == "/tmp/workspace", "Active tab and folder restoration")
         try store.archive(docs[0])
         let archives = try FileManager.default.contentsOfDirectory(atPath: folder.appendingPathComponent("Closed Tabs").path)
         check(archives.count == 1, "Closed untitled tab archived")
@@ -45,7 +49,7 @@ func runSelfTests() {
         let color = d.editor.layoutManager!.temporaryAttribute(.foregroundColor, atCharacterIndex: 0, effectiveRange: &range)
         check(color != nil && d.language.stringValue == "Swift", "Syntax colors use temporary attributes and detect file type")
         check(d.editor.string == "let value = 42 // comment", "Highlighting leaves document contents untouched")
-        let workspaceStore = WorkspaceStore()
+        let workspaceStore = FolderSessionStore(directory: folder)
         let root = folder.appendingPathComponent("tree").workspaceNormalizedURL
         let subdirectory = root.appendingPathComponent("z-folder")
         try FileManager.default.createDirectory(at: subdirectory, withIntermediateDirectories: true)
@@ -63,20 +67,19 @@ func runSelfTests() {
         var workspaceSession = EditorSession(documents: [doc, docs[0]], activeIndex: 0, workspace: root.path)
         workspaceSession.sidebar = SidebarState(width: 285, hidden: false, expandedPaths: [root.path, subdirectory.path], selectedPath: subdirectory.appendingPathComponent("nested.txt").path, scrollY: 0)
         workspaceSession.windowFrame = "{{40, 50}, {900, 650}}"
-        let firstWorkspace = folder.appendingPathComponent("First.medit-workspace")
-        let secondWorkspace = folder.appendingPathComponent("Second.medit-workspace")
-        try workspaceStore.save(workspaceSession, to: firstWorkspace)
-        let exact = try workspaceStore.load(firstWorkspace)
-        check(exact.documents[0].text == "unsaved workspace text" && exact.documents[1].text == docs[0].text, "Named workspace includes modified and untitled recovery contents")
-        check(exact.documents[0].selectionLength == 4 && exact.documents[0].scrollX == 15 && exact.windowFrame == workspaceSession.windowFrame, "Named workspace preserves selection, scroll and window geometry")
+        let secondFolder = folder.appendingPathComponent("second-tree")
+        try workspaceStore.save(workspaceSession)
+        let exact = try workspaceStore.load(root.path)!
+        check(exact.documents[0].text == "unsaved workspace text" && exact.documents[1].text == docs[0].text, "Folder session includes modified and untitled recovery contents")
+        check(exact.documents[0].selectionLength == 4 && exact.documents[0].scrollX == 15 && exact.windowFrame == workspaceSession.windowFrame, "Folder session preserves selection, scroll and window geometry")
         let originalContents = try String(contentsOf: originalFile, encoding: .utf8)
         check(originalContents == "original on disk", "Workspace saving does not overwrite original files")
-        var secondSession = workspaceSession; secondSession.documents[0].text = "second independent session"
-        try workspaceStore.save(secondSession, to: secondWorkspace)
+        var secondSession = workspaceSession; secondSession.workspace = secondFolder.path; secondSession.documents[0].text = "second independent session"
+        try workspaceStore.save(secondSession)
         workspaceSession.documents[0].text = "updated first session"
-        try workspaceStore.save(workspaceSession, to: firstWorkspace)
-        let secondUnchanged = try workspaceStore.load(secondWorkspace)
-        check(secondUnchanged.documents[0].text == "second independent session", "Named workspaces retain independent tab snapshots")
+        try workspaceStore.save(workspaceSession)
+        let secondUnchanged = try workspaceStore.load(secondFolder.path)!
+        check(secondUnchanged.documents[0].text == "second independent session", "Folder sessions retain independent tab snapshots")
         let sidebar = FolderSidebarController(); sidebar.setFolder(root.path, state: exact.sidebar)
         let restoredTree = sidebar.state(width: 285, hidden: false)
         check(Set(restoredTree.expandedPaths ?? []) == Set([root.path, subdirectory.path]), "Explorer restores expanded folders")
@@ -107,13 +110,115 @@ func runSelfTests() {
         check(abs(sidebar.view.frame.width - 300) < 1, "Sidebar width can be restored after hiding")
         split.setSidebarWidth(550)
         check(abs(sidebar.view.frame.width - 550) < 1, "Sidebar can expand beyond the former width limit")
-        let badWorkspace = folder.appendingPathComponent("Bad.medit-workspace")
-        try Data("{\"format\":\"medit-workspace\",\"version\":99,\"session\":{\"version\":1,\"documents\":[],\"activeIndex\":0}}".utf8).write(to: badWorkspace)
-        var rejected = false
-        do { _ = try workspaceStore.load(badWorkspace) } catch { rejected = true }
-        check(rejected, "Unsupported workspace versions are rejected")
         let legacy = try JSONDecoder().decode(EditorSession.self, from: JSONEncoder().encode(session))
         check(legacy.sidebar == nil && legacy.workspaceFile == nil && legacy.documents[0].selectionLength == nil, "Existing recovery sessions remain compatible")
+        let controller = AppDelegate()
+        controller.store = RecoveryStore(directory: folder.appendingPathComponent("controller"))
+        controller.folderStore = FolderSessionStore(directory: controller.store.directory)
+        controller.applicationDidFinishLaunching(Notification(name: NSApplication.didFinishLaunchingNotification))
+        controller.recoveryTimer?.invalidate()
+        defer { controller.window.orderOut(nil) }
+        controller.editor.string = "loose unsaved draft"; controller.captureDocument()
+        controller.openFolder(root)
+        check(controller.workspace == root.path && !controller.sidebarItem.isCollapsed, "Opening a folder selects its session and shows sidebar")
+        controller.openFile(originalFile)
+        let fileID = controller.documents[controller.activeIndex].id
+        controller.openFile(originalFile)
+        check(controller.documents.filter { $0.id == fileID }.count == 1, "Opening an existing file selects its tab without duplication")
+        controller.editor.string = "unsaved folder edit"; controller.editor.setSelectedRange(NSRange(location: 7, length: 0))
+        controller.newDocument(); controller.editor.string = "folder draft 🐦"; controller.captureDocument()
+        controller.togglePin(at: controller.documents.firstIndex { $0.id == fileID }!)
+        let firstIDs = controller.documents.map(\.id)
+        check(controller.documents.first?.id == fileID && controller.editor.string == "folder draft 🐦", "Pinning places tab first and preserves active document and contents")
+        controller.sidebarController.hideSidebar()
+        check(controller.sidebarItem.isCollapsed && controller.editor.string == "folder draft 🐦", "Hiding sidebar preserves draft contents")
+        controller.toggleWorkspaceSidebar()
+        check(!controller.sidebarItem.isCollapsed && controller.documents.map(\.id) == firstIDs, "Showing sidebar preserves tabs and order")
+        try FileManager.default.createDirectory(at: secondFolder, withIntermediateDirectories: true)
+        controller.openFolder(secondFolder)
+        controller.editor.string = "second folder draft"; controller.captureDocument()
+        controller.openFolder(root)
+        check(controller.documents.map(\.id) == firstIDs && controller.editor.string == "folder draft 🐦", "Switching folders restores tab order, active tab and untitled draft")
+        check(controller.documents.first { $0.id == fileID }?.cursor == 7, "Folder restoration preserves inactive document cursor")
+        check(controller.documents.first { $0.id == fileID }?.text == "unsaved folder edit", "Folder switching preserves unsaved original edits")
+        controller.openFolder(root)
+        check(controller.documents.map(\.id) == firstIDs, "Reopening active folder does not reset or duplicate tabs")
+        check(controller.documents.first { $0.id == fileID }?.pinned == true, "Folder switching restores pinned tabs")
+        controller.closeFolder()
+        check(controller.workspace == nil && controller.editor.string == "loose unsaved draft", "Closing folder restores loose draft session")
+        let closeItem = NSMenuItem(title: "Close Folder", action: #selector(AppDelegate.closeFolder), keyEquivalent: "")
+        check(!controller.validateMenuItem(closeItem), "Close Folder disabled without a folder")
+        controller.openFolder(root)
+        check(controller.documents.map(\.id) == firstIDs, "Close Folder preserves folder session for reopening")
+        check(controller.documents.first { $0.id == fileID }?.pinned == true, "Close Folder and reopening preserve pin state")
+        let diskAfterSwitch = try String(contentsOf: originalFile, encoding: .utf8)
+        check(diskAfterSwitch == "original on disk", "Switching and closing folders never writes unsaved changes to originals")
+        controller.activeIndex = controller.documents.firstIndex { $0.id == fileID }!; controller.loadActiveDocument()
+        check(controller.save(index: controller.activeIndex, asNew: false), "Save writes the active named document")
+        let saved = try String(contentsOf: originalFile, encoding: .utf8)
+        check(saved == "unsaved folder edit" && !controller.documents[controller.activeIndex].dirty, "Save updates disk and clears modified state")
+        controller.persistSession()
+        let restarted = try controller.store.load()!
+        check(restarted.documents.last?.text == "folder draft 🐦" && restarted.activeIndex == controller.activeIndex, "Quit snapshot preserves untitled draft and active document")
+        check(restarted.documents.first { $0.id == fileID }?.pinned == true, "Restart recovery preserves pinned tabs")
+        controller.togglePin(at: controller.activeIndex)
+        check(controller.documents[controller.activeIndex].pinned == false, "Pinned tabs can be unpinned")
+        check(legacy.documents.allSatisfy { $0.pinned == nil }, "Existing sessions without pin metadata remain compatible")
+        let renamed = folder.appendingPathComponent("renamed.txt")
+        controller.chooseSaveLocation = { _ in renamed }
+        check(controller.save(index: controller.activeIndex, asNew: true), "Save As accepts a chosen filename and location")
+        let renamedText = try String(contentsOf: renamed, encoding: .utf8)
+        check(renamedText == "unsaved folder edit" && controller.documents[controller.activeIndex].path == renamed.path, "Save As writes chosen file and updates active tab")
+        controller.newDocument(); controller.editor.string = "save all new draft"; controller.captureDocument()
+        var requestedNames: [String] = []
+        controller.chooseSaveLocation = { document in
+            requestedNames.append(document.title)
+            return folder.appendingPathComponent(document.title + ".txt")
+        }
+        controller.saveAllDocuments()
+        check(!requestedNames.isEmpty && controller.documents.allSatisfy { !$0.dirty }, "Save All requests filenames for drafts and saves all current-window documents")
+        controller.newDocument(); controller.editor.string = "cancelled draft"; controller.captureDocument()
+        controller.chooseSaveLocation = { _ in nil }
+        controller.saveAllDocuments()
+        check(controller.editor.string == "cancelled draft" && controller.documents[controller.activeIndex].path == nil, "Cancelling Save All preserves unsaved draft")
+        let openTitles = controller.openMenu().items.map(\.title)
+        check(openTitles == ["Open…", "Open Recent", "New File", "New Window", "Close File", "Close Folder"], "Open dropdown has precisely the requested actions")
+        let isolatedLoose = FolderSessionStore(directory: controller.store.directory)
+        isolatedLoose.looseDirectory = folder.appendingPathComponent("other-window-loose")
+        try isolatedLoose.save(EditorSession(documents: [EditorDocument(title: "Other window", text: "independent")], activeIndex: 0))
+        let mainLoose = try controller.folderStore.load(nil)!
+        check(mainLoose.documents[0].text == "loose unsaved draft", "Independent windows do not overwrite loose draft sessions")
+        let activeIDBeforeMove = controller.documents[controller.activeIndex].id
+        let firstPinnedID = controller.documents[0].id
+        controller.togglePin(at: 0)
+        let lastID = controller.documents.last!.id
+        controller.togglePin(at: controller.documents.count - 1)
+        check(controller.documents[0].id == firstPinnedID && controller.documents[1].id == lastID, "New pin is appended immediately after existing pinned tabs")
+        let pinnedOrder = Array(controller.documents.prefix(2).map(\.id))
+        controller.moveTab(firstPinnedID, to: controller.documents.count - 1)
+        check(Array(controller.documents.prefix(2).map(\.id)) == pinnedOrder, "Pinned tabs cannot be dragged out of their fixed positions")
+        let draggedID = controller.documents.last!.id
+        controller.moveTab(draggedID, to: 0)
+        check(Array(controller.documents.prefix(2).map(\.id)) == pinnedOrder && controller.documents[2].id == draggedID, "Unpinned drag before pinned tabs is clamped after the pinned group")
+        check(controller.documents[controller.activeIndex].id == activeIDBeforeMove && controller.editor.string == "cancelled draft", "Reordering preserves active document and unsaved contents")
+        let ordered = try controller.folderStore.load(root.path)!
+        controller.openFolder(secondFolder); controller.openFolder(root)
+        check(controller.documents.map(\.id) == ordered.documents.map(\.id), "Folder restoration preserves pinned group and dragged tab order")
+        controller.togglePin(at: 0)
+        check(controller.documents.first?.id == lastID && controller.documents[1].id == firstPinnedID && controller.documents[1].pinned == false, "Unpinning moves tab just after remaining pinned tabs")
+        var oldOrder = ordered
+        oldOrder.documents.reverse()
+        let oldActiveID = oldOrder.documents[oldOrder.activeIndex].id
+        controller.applySession(oldOrder)
+        check(controller.documents.prefix(2).allSatisfy { $0.pinned == true } && controller.documents[controller.activeIndex].id == oldActiveID, "Existing interleaved sessions normalize pinned tabs while preserving active document")
+        for _ in 0..<8 { controller.newDocument() }
+        controller.window.contentView?.layoutSubtreeIfNeeded()
+        let overflowingScroll = controller.tabs.subviews.first as! NSScrollView
+        overflowingScroll.tile()
+        check(overflowingScroll.horizontalScroller?.isHidden == false, "Overflowing tabs show their horizontal scrollbar")
+        check(overflowingScroll.contentView.bounds.height >= 36 && controller.tabItems.arrangedSubviews.allSatisfy { $0.frame.height >= 36 }, "Visible scrollbar does not reduce tab height or clip tab controls")
+        let folderFiles = try FileManager.default.contentsOfDirectory(atPath: root.path)
+        check(!folderFiles.contains(where: { $0.hasSuffix("medit-workspace") }), "No workspace file created inside folder")
         for encoding in [String.Encoding.utf8, .utf16, .utf16LittleEndian, .utf16BigEndian, .windowsCP1252, .macOSRoman] {
             let sample = "Café — text on macOS and Fedora\r\nSecond line\n"
             let file = folder.appendingPathComponent("encoding-\(encoding.rawValue).txt")
@@ -124,9 +229,59 @@ func runSelfTests() {
             let roundTrip = try TextFileCodec.read(file)
             check(roundTrip.text == sample, "Preserve text on encoding-aware save \(encoding.rawValue)")
         }
+        let gitFolder = folder.appendingPathComponent("git fixture").workspaceNormalizedURL
+        try FileManager.default.createDirectory(at: gitFolder.appendingPathComponent("nested"), withIntermediateDirectories: true)
+        func git(_ args: [String]) { check(GitStatusSnapshot.command(args, at: gitFolder.path) != nil, "Git fixture: " + args.prefix(2).joined(separator: " ")) }
+        git(["init", "-q"])
+        git(["config", "user.name", "medit tests"]); git(["config", "user.email", "tests@example.invalid"])
+        git(["config", "core.hooksPath", "/dev/null"])
+        for name in ["modified.txt", "staged.txt", "deleted.txt", "old name.txt", "nested/file.txt"] {
+            try "baseline".write(to: gitFolder.appendingPathComponent(name), atomically: true, encoding: .utf8)
+        }
+        try "ignored.tmp\n".write(to: gitFolder.appendingPathComponent(".gitignore"), atomically: true, encoding: .utf8)
+        git(["add", "."]); git(["commit", "-q", "--no-gpg-sign", "-m", "fixture"])
+        for name in ["modified.txt", "staged.txt", "nested/file.txt"] { try "changed".write(to: gitFolder.appendingPathComponent(name), atomically: true, encoding: .utf8) }
+        git(["add", "staged.txt"])
+        try FileManager.default.removeItem(at: gitFolder.appendingPathComponent("deleted.txt"))
+        git(["mv", "old name.txt", "renamed café.txt"])
+        try "new".write(to: gitFolder.appendingPathComponent("new file 🐦.txt"), atomically: true, encoding: .utf8)
+        try "ignore".write(to: gitFolder.appendingPathComponent("ignored.tmp"), atomically: true, encoding: .utf8)
+        let statuses = GitStatusSnapshot.read(folder: gitFolder.path)
+        check(statuses.files[gitFolder.appendingPathComponent("modified.txt").path]?.symbol == "M", "Git detects working-tree modifications")
+        check(statuses.files[gitFolder.appendingPathComponent("staged.txt").path]?.index == "M", "Git distinguishes staged changes")
+        check(statuses.files[gitFolder.appendingPathComponent("deleted.txt").path]?.symbol == "D", "Git detects deletions")
+        check(statuses.files[gitFolder.appendingPathComponent("renamed café.txt").path]?.symbol == "R", "Git parses rename destination with spaces and Unicode")
+        check(statuses.files[gitFolder.appendingPathComponent("new file 🐦.txt").path]?.symbol == "?", "Git detects Unicode untracked filenames")
+        check(statuses.files[gitFolder.appendingPathComponent("ignored.tmp").path] == nil, "Git omits ignored files")
+        check(statuses.folders[gitFolder.path] != nil && statuses.folders[gitFolder.appendingPathComponent("nested").path]?.symbol == "M", "Git aggregates changes into folder badges")
+        let nestedStatus = GitStatusSnapshot.read(folder: gitFolder.appendingPathComponent("nested").path)
+        check(nestedStatus.files[gitFolder.appendingPathComponent("nested/file.txt").path]?.symbol == "M", "Git status works when opening a repository subfolder")
+        let conflict = GitStatusSnapshot.parse(Data("UU conflict file.txt\0?? line\nbreak.txt\0".utf8), root: gitFolder)
+        check(conflict.files[gitFolder.appendingPathComponent("conflict file.txt").path]?.symbol == "!", "Git shows a distinct conflict badge")
+        check(conflict.files[gitFolder.appendingPathComponent("line\nbreak.txt").path]?.symbol == "?", "Git parses filenames containing newlines")
+        check(GitStatusSnapshot.read(folder: root.path).files.isEmpty, "Non-Git folders have no badges")
+        controller.sidebarController.setFolder(gitFolder.path, state: nil)
+        let off = NSButton(); off.state = .off; controller.changeGitStatus(off)
+        check(!GitStatusMonitor.preferenceEnabled && !controller.sidebarController.gitStatus.enabled && controller.sidebarController.gitStatus.snapshot.files.isEmpty, "Disabling Git preference immediately hides badges and disables scanning")
+        let on = NSButton(); on.state = .on; controller.changeGitStatus(on)
+        let gitDeadline = Date().addingTimeInterval(5)
+        while controller.sidebarController.gitStatus.snapshot.files.isEmpty && Date() < gitDeadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+        }
+        check(GitStatusMonitor.preferenceEnabled && !controller.sidebarController.gitStatus.snapshot.files.isEmpty, "Enabling Git preference asynchronously restores badges")
+        let originalGitFile = try String(contentsOf: gitFolder.appendingPathComponent("modified.txt"), encoding: .utf8)
+        check(originalGitFile == "changed", "Git scanning leaves original contents unchanged")
+        let indexBefore = try Data(contentsOf: gitFolder.appendingPathComponent(".git/index"))
+        _ = GitStatusSnapshot.read(folder: gitFolder.path)
+        let indexAfter = try Data(contentsOf: gitFolder.appendingPathComponent(".git/index"))
+        check(indexBefore == indexAfter, "Git status never writes the repository index")
+        UserDefaults.standard.set(oldGitPreference, forKey: "showGitStatus")
+        controller.gitTimer?.invalidate()
         let iconURL = Bundle.main.url(forResource: "AppIcon", withExtension: "icns")
         check(iconURL.flatMap { NSImage(contentsOf: $0) }?.isValid == true, "Packaged blue-plus application icon decodes correctly")
         print("\(checks) checks passed")
+        UserDefaults.standard.set(oldRecent, forKey: "recentItems")
+        UserDefaults.standard.set(oldGitPreference, forKey: "showGitStatus")
         exit(0)
     } catch { fatalError("Self-test error: \(error)") }
 }

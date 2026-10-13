@@ -22,13 +22,19 @@ open "$HOME/Applications/medit-.app"
 ```
 
 The app is not notarized; the local development build does not require a signing account.
-Workspace snapshots and recovery data remain local and are excluded from Git.
+Folder sessions and recovery data remain local in application data.
 
 ## Editing
 
-- Command-N creates a tab; Command-O opens text files (multiple selection supported).
+- Command-N creates a tab; Command-O opens files or folders (multiple selection supported).
 - Command-S saves; File > Save As writes to a new location.
 - Command-W closes the active tab.
+- Drag a tab by its title onto another tab to change its order. Folder sessions remember
+  the order, and dragging keeps the active document selected. Pinned tabs stay fixed at the left;
+  unpinned tabs cannot be dragged before them.
+- Click a tab’s pin icon to pin or unpin it. Newly pinned tabs go after the last pinned tab and hide their
+  close button. Unpinning moves a tab after the remaining pinned group; Close File or Command-W can still close them explicitly. Pin state is remembered
+  with each folder session and across restarts, including untitled drafts.
 - Command-F opens the native Find bar; enable Replace for replacement and Replace All.
 - Command-G finds the next occurrence.
 - Command-comma opens Settings: interface font/size and editor font/size are independent.
@@ -38,21 +44,28 @@ Workspace snapshots and recovery data remain local and are excluded from Git.
   A single pasted row repeats; multiline paste must contain exactly one line per selected row.
   Short lines are padded when typing. Escape or a normal click exits block mode.
   Monospaced fonts are recommended. Tabs use two-column stops. Lines do not wrap.
-- File > Open Folder (also in the header dropdown) displays an expandable folder tree.
-  Double-click a file to open a tab; an already-open file activates its existing tab.
-- File > Save Workspace As creates a named `.medit-workspace` file. The file updates automatically
-  as you edit and on close, preserving folder, tab order, active tab, text (including unsaved
-  recovery contents), selection, scroll positions, expanded folders, selected sidebar file,
-  sidebar width/visibility and window geometry.
-- File > Open Workspace or double-clicking a workspace file restores that named session.
-  Switching workspaces first saves the outgoing named workspace. Unnamed unsaved tabs are
-  retained in the closed-tab recovery archive before the tab set is replaced.
-- Drag the visible divider along the sidebar’s right edge to resize it; the sidebar button or View menu hides/shows it.
-  The refresh button reloads the folder tree; switching back to the app also refreshes it.
-  Directory symlinks are not expanded recursively. Packages are displayed as files.
-- Workspace files store local absolute paths and recovery contents. If original files have
-  changed externally, their recovered tab contents remain intact and Save asks before replacing
-  the changed originals. Missing folders display a read error without discarding tabs.
+- Open ▾ contains Open…, Open Recent, New File, New Window, Close File and Close Folder.
+  Open… accepts files and folders; files open as tabs, and an existing tab is selected.
+  Open Recent distinguishes files and folders with labels and icons.
+- Each folder automatically remembers its editing session in application data. Opening another
+  folder preserves the outgoing session and restores the selected folder's tabs, order, active
+  document, cursor/selection, scroll positions and sidebar state. Reopening the active folder
+  keeps its tabs intact. Opening a folder always shows its sidebar.
+- Untitled drafts and unsaved file edits survive switching folders, closing folders and quitting.
+  Remembering sessions never saves edits to original documents or creates files inside folders.
+  Documents opened without a folder have a separate remembered session.
+- Close Folder preserves its session and returns to documents opened without a folder.
+  Close File retains the optional save/cancel/keep-recovery prompt.
+- Save is a split button: its main portion saves the active document; its arrow offers Save,
+  Save As… and Save All. Untitled documents request a filename and location. Save All saves
+  modified documents and untitled drafts in the current window, stopping if a save is cancelled.
+- Drag the sidebar divider to resize it. The toolbar sidebar control and the × beside Refresh
+  hide/show the sidebar without affecting tabs. Refresh reloads the folder tree; returning to
+  the app also refreshes it. Directory symlinks are not expanded recursively.
+- The hamburger menu contains Preferences…, Help and About medit-. New Window creates an
+  independent editor window, with recovery restored at the next launch.
+- If an original changes externally, saving a modified recovered tab asks before replacing it.
+  Missing folders show a read error without discarding tabs.
 - The application menu includes Restore Closed Tab, which opens the recovery archive.
 
 ## Recovery and closing
@@ -67,7 +80,7 @@ choose Save, Cancel or Keep Recovery. Quit restores all open tabs next launch; e
 closed unsaved tabs are retained in the Closed Tabs archive and can be reopened from the
 application menu. Recovery archives are local and are not automatically deleted.
 
-Clean saved tabs in unnamed sessions reload current disk contents at restart; named workspaces restore their captured contents. Modified tabs restore recovery
+Clean saved tabs reload current disk contents at restoration. Modified tabs restore recovery
 contents; saving warns if the original file has changed externally. Text encoding is detected when opening files, including UTF-8, UTF-16, Windows-1252, and Mac Roman. Existing files retain their detected encoding when saved; new files and Save As use UTF-8 for sharing between macOS and Linux. Existing newline contents are preserved. Binary files are not supported.
 
 ## Syntax highlighting
@@ -83,11 +96,11 @@ file extension; untitled files remain Plain Text. The example file demonstrates 
 build/Build/Products/Debug/medit-.app/Contents/MacOS/medit- --self-test
 ```
 
-Focused tests cover Unicode recovery, workspace/active-tab restoration, modified originals,
+Focused tests cover Unicode recovery, folder/active-tab restoration, modified originals,
 closed-tab archives, corrupt snapshot fallback, block replacement, repeated multi-caret typing,
 multiline block paste, short-row padding and non-destructive syntax highlighting.
 UI checks cover tab creation, restart restoration, save/recovery, native find/replace,
-font sizes, optional close prompts, folder/file opening, workspace save-on-close and restoration, and native sidebar resizing. Option-drag geometry still warrants hands-on review;
+font sizes, optional close prompts, folder/file opening, folder switching, automatic restoration and unsaved-draft preservation, and native sidebar resizing. Option-drag geometry still warrants hands-on review;
 wide Unicode characters and selections through the middle of tabs have not been exhaustively tested.
 
 ## Project structure
@@ -95,11 +108,20 @@ wide Unicode characters and selections through the middle of tabs have not been 
 - `main.swift`: window, header, gutter, native menus and app lifecycle.
 - `Session.swift`: document/session models, recovery store, file actions, tabs, settings and highlighting.
 - `BlockTextView.swift`: custom rectangular selection and multi-row edits.
-- `Workspace.swift`: folder explorer, split view and named-workspace storage/restoration.
-- `SelfTests.swift`: focused executable checks (41 checks).
-- `Info.plist`: application identity and native `.medit-workspace` association.
+- `Workspace.swift`: folder explorer, split view and automatic folder-session storage/restoration.
+- `SelfTests.swift`: focused executable checks.
+- `Info.plist`: application identity.
 - `Resources/AppIcon.icns`: macOS icon, packaged from the existing gedit blue-plus icon on Scopuli.
   `AppIconSource.png` preserves the original source asset.
 
-Git indicators remain a future enhancement. Git remotes are `github`
+Git status badges appear beside sidebar filenames for folders inside a Git repository.
+Preferences > Show Git status in sidebar enables/disables them across windows and launches.
+M = modified, A = added, D = deleted, R = renamed, C = copied, T = type changed,
+? = untracked, ! = merge conflict. Folder badges summarize changes inside them; clean and
+ignored files have no badge. Hover for staged/working-tree details. Status refreshes in the
+background every three seconds, on Refresh, after saving and when returning to the app.
+Badges describe disk contents; the tab's * still indicates unsaved editor changes.
+Scanning stops when disabled. Git status is read-only and never stages or commits files.
+
+Git remotes are `github`
 (GitHub) and `origin` (Scopuli Gitea); development branch is `main`. The application source and build configuration are maintained in both repositories.

@@ -24,6 +24,7 @@ struct EditorDocument: Codable {
     var scrollX: Double?
     var selectionLength: Int?
     var diskChanged: Bool?
+    var pinned: Bool? // Optional for compatibility with existing recovery snapshots.
     var dirty: Bool { text != savedText || diskChanged == true }
 }
 struct EditorSession: Codable {
@@ -82,8 +83,8 @@ extension AppDelegate {
         guard !loading, !documents.isEmpty else { return }
         do {
             let snapshot = sessionSnapshot()
+            try folderStore.save(snapshot)
             try store.save(snapshot)
-            try saveNamedWorkspace(snapshot)
             workspaceSaveError = false
         } catch {
             if !workspaceSaveError { workspaceSaveError = true; report(error) }
@@ -91,7 +92,7 @@ extension AppDelegate {
     }
     func restoreSession() {
         do {
-            if let session = try store.load() { applySession(session, namedURL: session.workspaceFile.map { URL(fileURLWithPath: $0) }) }
+            if let session = try store.load() { applySession(session) }
         } catch { report(error) }
         if documents.isEmpty { documents = [EditorDocument(title: "Untitled Document 1")]; loadActiveDocument(); applyWorkspaceLayout(nil) }
     }
@@ -116,21 +117,49 @@ extension AppDelegate {
     func rebuildTabs() {
         for view in tabItems.arrangedSubviews { tabItems.removeArrangedSubview(view); view.removeFromSuperview() }
         for (index, doc) in documents.enumerated() {
-            let tab = NSView(); tab.wantsLayer = true
+            let tab = DraggableTabView(); tab.documentID = doc.id; tab.isPinned = doc.pinned == true
+            tab.onDrop = { [weak self] id in self?.moveTab(id, to: index) }; tab.wantsLayer = true
+            tab.layer?.cornerRadius = 8
+            tab.layer?.maskedCorners = [.layerMinXMaxYCorner, .layerMaxXMaxYCorner]
+            tab.layer?.borderWidth = 1; tab.layer?.borderColor = NSColor.separatorColor.cgColor
             tab.layer?.backgroundColor = (index == activeIndex ? EditorPalette.activeTab : EditorPalette.inactiveTab).cgColor
-            let select = NSButton(title: (doc.dirty ? "*" : "") + doc.title, target: self, action: #selector(selectTab(_:)))
+            let select = DraggableTabButton(title: (doc.dirty ? "*" : "") + doc.title, target: self, action: #selector(selectTab(_:)))
             select.isBordered = false; select.font = interfaceFont; select.tag = index; select.toolTip = doc.path ?? doc.title
             let close = NSButton(image: NSImage(systemSymbolName: "xmark", accessibilityDescription: "Close \(doc.title)")!, target: self, action: #selector(closeTab(_:)))
-            close.isBordered = false; close.tag = index
+            close.isBordered = false; close.tag = index; close.isHidden = doc.pinned == true
+            let pinTitle = doc.pinned == true ? "Unpin \(doc.title)" : "Pin \(doc.title)"
+            let pin = NSButton(image: NSImage(systemSymbolName: doc.pinned == true ? "pin.fill" : "pin", accessibilityDescription: pinTitle)!, target: self, action: #selector(toggleTabPin(_:)))
+            pin.isBordered = false; pin.tag = index; pin.toolTip = pinTitle; pin.setAccessibilityLabel(pinTitle)
             let indicator = NSView(); indicator.wantsLayer = true; indicator.layer?.backgroundColor = (index == activeIndex ? NSColor.systemBlue : NSColor.clear).cgColor
-            [select, close, indicator].forEach { tab.addSubview($0); $0.translatesAutoresizingMaskIntoConstraints = false }
-            NSLayoutConstraint.activate([tab.heightAnchor.constraint(equalToConstant: 45), tab.widthAnchor.constraint(equalToConstant: max(220, min(360, select.intrinsicContentSize.width + 70))), select.leadingAnchor.constraint(equalTo: tab.leadingAnchor, constant: 16), select.centerYAnchor.constraint(equalTo: tab.centerYAnchor), select.trailingAnchor.constraint(lessThanOrEqualTo: close.leadingAnchor, constant: -10), close.trailingAnchor.constraint(equalTo: tab.trailingAnchor, constant: -14), close.centerYAnchor.constraint(equalTo: tab.centerYAnchor), indicator.leadingAnchor.constraint(equalTo: tab.leadingAnchor), indicator.trailingAnchor.constraint(equalTo: tab.trailingAnchor), indicator.bottomAnchor.constraint(equalTo: tab.bottomAnchor), indicator.heightAnchor.constraint(equalToConstant: 3)])
+            [select, pin, close, indicator].forEach { tab.addSubview($0); $0.translatesAutoresizingMaskIntoConstraints = false }
+            NSLayoutConstraint.activate([tab.heightAnchor.constraint(equalToConstant: 36), tab.widthAnchor.constraint(equalToConstant: max(220, min(360, select.intrinsicContentSize.width + 96))), select.leadingAnchor.constraint(equalTo: tab.leadingAnchor, constant: 16), select.centerYAnchor.constraint(equalTo: tab.centerYAnchor), select.trailingAnchor.constraint(lessThanOrEqualTo: pin.leadingAnchor, constant: -10), pin.trailingAnchor.constraint(equalTo: close.leadingAnchor, constant: -8), pin.centerYAnchor.constraint(equalTo: tab.centerYAnchor), pin.widthAnchor.constraint(equalToConstant: 18), close.trailingAnchor.constraint(equalTo: tab.trailingAnchor, constant: -14), close.centerYAnchor.constraint(equalTo: tab.centerYAnchor), indicator.leadingAnchor.constraint(equalTo: tab.leadingAnchor), indicator.trailingAnchor.constraint(equalTo: tab.trailingAnchor), indicator.bottomAnchor.constraint(equalTo: tab.bottomAnchor), indicator.heightAnchor.constraint(equalToConstant: 3)])
             tabItems.addArrangedSubview(tab)
         }
         tabItems.layoutSubtreeIfNeeded()
-        tabItems.setFrameSize(NSSize(width: tabItems.fittingSize.width, height: 45))
+        tabItems.setFrameSize(NSSize(width: tabItems.fittingSize.width, height: 36))
         tabItems.layoutSubtreeIfNeeded()
         if tabItems.arrangedSubviews.indices.contains(activeIndex) { tabItems.scrollToVisible(tabItems.arrangedSubviews[activeIndex].frame) }
+    }
+    func moveTab(_ id: UUID, to destination: Int) {
+        guard let source = documents.firstIndex(where: { $0.id == id }), documents.indices.contains(destination), source != destination, documents[source].pinned != true else { return }
+        captureDocument()
+        let activeID = documents[activeIndex].id
+        let moved = documents.remove(at: source)
+        documents.insert(moved, at: max(documents.filter { $0.pinned == true }.count, destination))
+        activeIndex = documents.firstIndex { $0.id == activeID } ?? 0
+        rebuildTabs(); persistSession()
+    }
+    @objc func toggleTabPin(_ sender: NSButton) { togglePin(at: sender.tag) }
+    func togglePin(at index: Int) {
+        guard documents.indices.contains(index) else { return }
+        captureDocument()
+        let activeID = documents[activeIndex].id
+        var document = documents.remove(at: index)
+        document.pinned = !(document.pinned ?? false)
+        let boundary = documents.filter { $0.pinned == true }.count
+        documents.insert(document, at: boundary)
+        activeIndex = documents.firstIndex { $0.id == activeID } ?? 0
+        rebuildTabs(); persistSession()
     }
     @objc func selectTab(_ sender: NSButton) { captureDocument(); activeIndex = sender.tag; loadActiveDocument(); persistSession() }
     @objc func nextTab() { captureDocument(); activeIndex = (activeIndex + 1) % documents.count; loadActiveDocument() }
@@ -143,32 +172,27 @@ extension AppDelegate {
         loadActiveDocument(); persistSession()
     }
     @objc func openDocuments() {
-        let panel = NSOpenPanel(); panel.allowsMultipleSelection = true; panel.canChooseDirectories = false
+        let panel = NSOpenPanel(); panel.allowsMultipleSelection = true; panel.canChooseDirectories = true
         if let workspace { panel.directoryURL = URL(fileURLWithPath: workspace) }
         if panel.runModal() == .OK { for url in panel.urls { openFile(url) } }
     }
     func openFile(_ suppliedURL: URL) {
         let url = suppliedURL.workspaceNormalizedURL
-        if url.pathExtension.lowercased() == "medit-workspace" { openWorkspaceFile(url); return }
+        if (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true { openFolder(url); return }
         captureDocument()
-        if let index = documents.firstIndex(where: { $0.path.map { URL(fileURLWithPath: $0).workspaceNormalizedURL.path } == url.path }) { activeIndex = index; loadActiveDocument(); return }
+        if let index = documents.firstIndex(where: { $0.path.map { URL(fileURLWithPath: $0).workspaceNormalizedURL.path } == url.path }) { activeIndex = index; loadActiveDocument(); rememberRecent(url, folder: false); persistSession(); return }
         do {
             let decoded = try TextFileCodec.read(url)
             documents.append(EditorDocument(title: url.lastPathComponent, path: url.path, text: decoded.text, savedText: decoded.text, textEncoding: decoded.encoding.rawValue)); activeIndex = documents.count - 1
-            loadActiveDocument(); persistSession()
+            loadActiveDocument(); rememberRecent(url, folder: false); persistSession()
         } catch { report(error) }
     }
     func application(_ sender: NSApplication, openFiles filenames: [String]) { filenames.forEach { openFile(URL(fileURLWithPath: $0)) }; sender.reply(toOpenOrPrint: .success) }
-    @objc func openWorkspace() {
-        let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = false
-        panel.message = "Choose a folder to display in the workspace sidebar."
-        if let workspace { panel.directoryURL = URL(fileURLWithPath: workspace) }
-        if panel.runModal() == .OK, let url = panel.url {
-            do {
-                try saveCurrentSessionBeforeSwitch()
-                workspaceFile = nil; workspace = url.path; workspaceSaveError = false
-                applyWorkspaceLayout(SidebarState()); updateWorkspaceTitle(); persistSession()
-            } catch { report(error) }
+    @objc func openWorkspace() { openDocuments() }
+    @objc func saveAllDocuments() {
+        captureDocument()
+        for i in documents.indices where documents[i].dirty {
+            if !save(index: i, asNew: false) { return }
         }
     }
     @objc func saveDocument() { _ = save(index: activeIndex, asNew: false) }
@@ -177,9 +201,14 @@ extension AppDelegate {
         captureDocument()
         var url = documents[index].path.map { URL(fileURLWithPath: $0) }
         if asNew || url == nil {
-            let panel = NSSavePanel(); panel.nameFieldStringValue = documents[index].title
-            if let workspace { panel.directoryURL = URL(fileURLWithPath: workspace) }
-            guard panel.runModal() == .OK else { return false }; url = panel.url
+            if let chooseSaveLocation {
+                guard let chosen = chooseSaveLocation(documents[index]) else { return false }
+                url = chosen
+            } else {
+                let panel = NSSavePanel(); panel.nameFieldStringValue = documents[index].title
+                if let workspace { panel.directoryURL = URL(fileURLWithPath: workspace) }
+                guard panel.runModal() == .OK else { return false }; url = panel.url
+            }
         }
         guard let url else { return false }
         if !asNew, documents[index].path == url.path, let decoded = try? TextFileCodec.read(url), decoded.text != documents[index].savedText {
@@ -216,22 +245,39 @@ extension AppDelegate {
         loadActiveDocument(); persistSession()
     }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        for i in documents.indices { if !approveClose(i) { return .terminateCancel } }
-        do { let snapshot = sessionSnapshot(); try store.save(snapshot); try saveNamedWorkspace(snapshot) } catch { report(error); return .terminateCancel }
+        let controllers = [self] + additionalWindows
+        for controller in controllers where !controller.windowClosed {
+            for i in controller.documents.indices { if !controller.approveClose(i) { return .terminateCancel } }
+        }
+        do {
+            for controller in controllers where !controller.windowClosed { try controller.saveCurrentSessionBeforeSwitch() }
+            try saveWindowList()
+        } catch { report(error); return .terminateCancel }
         return .terminateNow
+    }
+    func saveWindowList() throws {
+        try FileManager.default.createDirectory(at: delegate.store.directory, withIntermediateDirectories: true)
+        let paths = delegate.additionalWindows.filter { !$0.windowClosed }.map { $0.store.directory.path }
+        try JSONEncoder().encode(paths).write(to: delegate.store.directory.appendingPathComponent("windows.json"), options: .atomic)
     }
     func windowWillReturnUndoManager(_ window: NSWindow) -> UndoManager? { editor.documentUndoManager }
     @objc func undoEdit() { editor.blockRanges = []; editor.documentUndoManager.undo() }
     @objc func redoEdit() { editor.blockRanges = []; editor.documentUndoManager.redo() }
-    func windowShouldClose(_ sender: NSWindow) -> Bool { NSApp.terminate(nil); return false }
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        let others = ([delegate] + delegate.additionalWindows).filter { $0 !== self && !$0.windowClosed }
+        if others.isEmpty { NSApp.terminate(nil); return false }
+        for i in documents.indices { if !approveClose(i) { return false } }
+        do {
+            try saveCurrentSessionBeforeSwitch(); windowClosed = true
+            try saveWindowList(); recoveryTimer?.invalidate(); gitTimer?.invalidate()
+            return true
+        } catch { windowClosed = false; report(error); return false }
+    }
     @objc func showAppMenu(_ sender: NSButton) {
-        let menu = NSMenu(); menu.addItem(withTitle: "Settings…", action: #selector(showSettings), keyEquivalent: "").target = self
-        menu.addItem(withTitle: "Restore Closed Tab…", action: #selector(restoreClosedTab), keyEquivalent: "").target = self
-        menu.addItem(withTitle: "Open Folder…", action: #selector(openWorkspace), keyEquivalent: "").target = self
-        menu.addItem(withTitle: "Open Workspace…", action: #selector(openNamedWorkspace), keyEquivalent: "").target = self
-        menu.addItem(withTitle: "Save Workspace As…", action: #selector(saveWorkspaceAs), keyEquivalent: "").target = self
-        menu.addItem(withTitle: "Show/Hide Sidebar", action: #selector(toggleWorkspaceSidebar), keyEquivalent: "").target = self
-        menu.addItem(withTitle: "Column Selection Help", action: #selector(columnHelp), keyEquivalent: "").target = self
+        let menu = NSMenu()
+        for (title, action) in [("Preferences…", #selector(showSettings)), ("Help", #selector(columnHelp)), ("About medit-", #selector(showAbout))] {
+            menu.addItem(withTitle: title, action: action, keyEquivalent: "").target = self
+        }
         menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.maxY), in: sender)
     }
     @objc func restoreClosedTab() {
@@ -272,7 +318,7 @@ extension AppDelegate {
     }
     @objc func showSettings() {
         if let settingsWindow { settingsWindow.makeKeyAndOrderFront(nil); return }
-        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 340), styleMask: [.titled, .closable], backing: .buffered, defer: false); w.title = "medit- Settings"; w.isReleasedWhenClosed = false
+        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 385), styleMask: [.titled, .closable], backing: .buffered, defer: false); w.title = "medit- Preferences"; w.isReleasedWhenClosed = false
         let stack = NSStackView(); stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 16
         let d = UserDefaults.standard
         for (label, key, fallback) in [("Interface font", "interfaceFont", interfaceFont.fontName.hasPrefix(".") ? "System" : interfaceFont.fontName), ("Interface size", "interfaceSize", "17"), ("Editor font", "editorFont", "Menlo"), ("Editor size", "editorSize", "16")] {
@@ -281,6 +327,8 @@ extension AppDelegate {
             let row = NSStackView(views: [title, input]); row.spacing = 12; stack.addArrangedSubview(row)
         }
         let prompt = NSButton(checkboxWithTitle: "Ask to save modified tabs when closing", target: self, action: #selector(changePrompt(_:))); prompt.state = d.bool(forKey: "promptOnClose") ? .on : .off; stack.addArrangedSubview(prompt)
+        let git = NSButton(checkboxWithTitle: "Show Git status in sidebar", target: self, action: #selector(changeGitStatus(_:)))
+        git.state = GitStatusMonitor.preferenceEnabled ? .on : .off; stack.addArrangedSubview(git)
         let note = NSTextField(wrappingLabelWithString: "Press Return to apply a font or size. Recovery copies are always kept. Editor fonts should be monospaced for column selection."); stack.addArrangedSubview(note)
         w.contentView!.addSubview(stack); stack.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([stack.leadingAnchor.constraint(equalTo: w.contentView!.leadingAnchor, constant: 24), stack.trailingAnchor.constraint(equalTo: w.contentView!.trailingAnchor, constant: -24), stack.topAnchor.constraint(equalTo: w.contentView!.topAnchor, constant: 24)])
@@ -294,6 +342,12 @@ extension AppDelegate {
             guard sender.stringValue == "System" || NSFont(name: sender.stringValue, size: 16) != nil else { NSSound.beep(); return }; UserDefaults.standard.set(sender.stringValue, forKey: key)
         }
         applyFonts()
+    }
+    @objc func changeGitStatus(_ sender: NSButton) {
+        UserDefaults.standard.set(sender.state == .on, forKey: "showGitStatus")
+        for controller in [delegate] + delegate.additionalWindows + [self] where !controller.windowClosed {
+            controller.sidebarController.updateGitPreference()
+        }
     }
     @objc func changePrompt(_ sender: NSButton) { UserDefaults.standard.set(sender.state == .on, forKey: "promptOnClose") }
     /// Apply library colors as temporary display attributes, leaving plain-text storage intact.
@@ -309,6 +363,57 @@ extension AppDelegate {
         guard let colored = highlighter.highlight(editor.string, as: name), colored.string == editor.string else { return }
         colored.enumerateAttribute(.foregroundColor, in: full) { color, range, _ in
             if let color { layout.addTemporaryAttribute(.foregroundColor, value: color, forCharacterRange: range) }
+        }
+    }
+}
+
+/// Each tab is a drop target, identified by document ID rather than an index that can change.
+final class DraggableTabView: NSView, NSDraggingSource {
+    static let tabType = NSPasteboard.PasteboardType("com.greenfinch628.medit.tab")
+    var documentID = UUID()
+    var isPinned = false
+    var onDrop: ((UUID) -> Void)?
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        registerForDraggedTypes([Self.tabType])
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    func beginDrag(with event: NSEvent) {
+        let item = NSPasteboardItem(); item.setString(documentID.uuidString, forType: Self.tabType)
+        let dragging = NSDraggingItem(pasteboardWriter: item)
+        let image = NSImage(size: bounds.size)
+        if let bitmap = bitmapImageRepForCachingDisplay(in: bounds) {
+            cacheDisplay(in: bounds, to: bitmap); image.addRepresentation(bitmap)
+        }
+        dragging.setDraggingFrame(bounds, contents: image)
+        beginDraggingSession(with: [dragging], event: event, source: self)
+    }
+    func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation { context == .withinApplication ? .move : [] }
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard let source = sender.draggingSource as? DraggableTabView, source.superview === superview else { return [] }
+        return .move
+    }
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool { draggingEntered(sender) == .move }
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard draggingEntered(sender) == .move,
+              let value = sender.draggingPasteboard.string(forType: Self.tabType), let id = UUID(uuidString: value) else { return false }
+        onDrop?(id); return true
+    }
+}
+
+final class DraggableTabButton: NSButton {
+    override func mouseDown(with event: NSEvent) {
+        guard let tab = superview as? DraggableTabView, let window else { super.mouseDown(with: event); return }
+        if tab.isPinned { super.mouseDown(with: event); return }
+        let start = event.locationInWindow
+        while let next = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) {
+            if next.type == .leftMouseUp {
+                if bounds.contains(convert(next.locationInWindow, from: nil)) { performClick(nil) }
+                return
+            }
+            if hypot(next.locationInWindow.x - start.x, next.locationInWindow.y - start.y) >= 4 {
+                tab.beginDrag(with: next); return
+            }
         }
     }
 }
