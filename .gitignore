@@ -1,0 +1,11 @@
+# Xcode local state and build output
+.DS_Store
+build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+*.xccheckout
+*.xcscmblueprint
+
+# Local workspace snapshots include unsaved document contents
+*.medit-workspace
