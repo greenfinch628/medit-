@@ -114,6 +114,16 @@ func runSelfTests() {
         check(rejected, "Unsupported workspace versions are rejected")
         let legacy = try JSONDecoder().decode(EditorSession.self, from: JSONEncoder().encode(session))
         check(legacy.sidebar == nil && legacy.workspaceFile == nil && legacy.documents[0].selectionLength == nil, "Existing recovery sessions remain compatible")
+        for encoding in [String.Encoding.utf8, .utf16, .utf16LittleEndian, .utf16BigEndian, .windowsCP1252, .macOSRoman] {
+            let sample = "Café — text on macOS and Fedora\r\nSecond line\n"
+            let file = folder.appendingPathComponent("encoding-\(encoding.rawValue).txt")
+            try sample.write(to: file, atomically: true, encoding: encoding)
+            let decoded = try TextFileCodec.read(file)
+            check(decoded.text == sample, "Detect text encoding \(encoding.rawValue) without changing newlines")
+            try decoded.text.write(to: file, atomically: true, encoding: decoded.encoding)
+            let roundTrip = try TextFileCodec.read(file)
+            check(roundTrip.text == sample, "Preserve text on encoding-aware save \(encoding.rawValue)")
+        }
         let iconURL = Bundle.main.url(forResource: "AppIcon", withExtension: "icns")
         check(iconURL.flatMap { NSImage(contentsOf: $0) }?.isValid == true, "Packaged blue-plus application icon decodes correctly")
         print("\(checks) checks passed")

@@ -2,12 +2,23 @@ import AppKit
 
 extension Double { func nonzero(_ fallback: Double) -> Double { self > 0 ? self : fallback } }
 
+enum TextFileCodec {
+    static func read(_ url: URL) throws -> (text: String, encoding: String.Encoding) {
+        var encoding = String.Encoding.utf8
+        let text = try String(contentsOf: url, usedEncoding: &encoding)
+        // Keep binary files out of the plain-text editor after Unicode decoding.
+        guard !text.unicodeScalars.contains(where: { $0.value == 0 }) else { throw CocoaError(.fileReadInapplicableStringEncoding) }
+        return (text, encoding)
+    }
+}
+
 struct EditorDocument: Codable {
     var id = UUID()
     var title: String
     var path: String?
     var text = ""
     var savedText = ""
+    var textEncoding: UInt?
     var cursor = 0
     var scrollY: Double = 0
     var scrollX: Double?
@@ -142,8 +153,8 @@ extension AppDelegate {
         captureDocument()
         if let index = documents.firstIndex(where: { $0.path.map { URL(fileURLWithPath: $0).workspaceNormalizedURL.path } == url.path }) { activeIndex = index; loadActiveDocument(); return }
         do {
-            let text = try String(contentsOf: url, encoding: .utf8)
-            documents.append(EditorDocument(title: url.lastPathComponent, path: url.path, text: text, savedText: text)); activeIndex = documents.count - 1
+            let decoded = try TextFileCodec.read(url)
+            documents.append(EditorDocument(title: url.lastPathComponent, path: url.path, text: decoded.text, savedText: decoded.text, textEncoding: decoded.encoding.rawValue)); activeIndex = documents.count - 1
             loadActiveDocument(); persistSession()
         } catch { report(error) }
     }
@@ -171,13 +182,15 @@ extension AppDelegate {
             guard panel.runModal() == .OK else { return false }; url = panel.url
         }
         guard let url else { return false }
-        if !asNew, documents[index].path == url.path, let disk = try? String(contentsOf: url, encoding: .utf8), disk != documents[index].savedText {
+        if !asNew, documents[index].path == url.path, let decoded = try? TextFileCodec.read(url), decoded.text != documents[index].savedText {
             let alert = NSAlert(); alert.messageText = "The file has changed on disk."; alert.informativeText = "Replace it with this tab’s recovered contents, or cancel and use Save As to preserve both versions."
             alert.addButton(withTitle: "Cancel"); alert.addButton(withTitle: "Replace")
             guard alert.runModal() == .alertSecondButtonReturn else { return false }
         }
         do {
-            try documents[index].text.write(to: url, atomically: true, encoding: .utf8)
+            let encoding = asNew || documents[index].path == nil ? String.Encoding.utf8 : String.Encoding(rawValue: documents[index].textEncoding ?? String.Encoding.utf8.rawValue)
+            try documents[index].text.write(to: url, atomically: true, encoding: encoding)
+            documents[index].textEncoding = encoding.rawValue
             documents[index].path = url.path; documents[index].title = url.lastPathComponent; documents[index].savedText = documents[index].text; documents[index].diskChanged = false
             rebuildTabs(); highlight(); sidebarController.refreshTree(); persistSession(); return true
         } catch { report(error); return false }

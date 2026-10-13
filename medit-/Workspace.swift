@@ -246,9 +246,10 @@ extension AppDelegate {
         workspace = session.workspace; workspaceFile = namedURL; workspaceSaveError = false
         undoManagers.removeAll()
         for i in documents.indices {
-            if let path = documents[i].path, let disk = try? String(contentsOfFile: path, encoding: .utf8) {
-                if namedURL != nil { documents[i].diskChanged = disk != documents[i].savedText }
-                else if !documents[i].dirty { documents[i].text = disk; documents[i].savedText = disk }
+            if let path = documents[i].path, let decoded = try? TextFileCodec.read(URL(fileURLWithPath: path)) {
+                if documents[i].textEncoding == nil { documents[i].textEncoding = decoded.encoding.rawValue }
+                if namedURL != nil { documents[i].diskChanged = decoded.text != documents[i].savedText }
+                else if !documents[i].dirty { documents[i].text = decoded.text; documents[i].savedText = decoded.text; documents[i].textEncoding = decoded.encoding.rawValue }
             }
         }
         if documents.isEmpty { documents = [EditorDocument(title: "Untitled Document 1")] }

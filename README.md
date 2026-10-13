@@ -26,7 +26,7 @@ Workspace snapshots and recovery data remain local and are excluded from Git.
 
 ## Editing
 
-- Command-N creates a tab; Command-O opens UTF-8 files (multiple selection supported).
+- Command-N creates a tab; Command-O opens text files (multiple selection supported).
 - Command-S saves; File > Save As writes to a new location.
 - Command-W closes the active tab.
 - Command-F opens the native Find bar; enable Replace for replacement and Replace All.
@@ -68,8 +68,7 @@ closed unsaved tabs are retained in the Closed Tabs archive and can be reopened 
 application menu. Recovery archives are local and are not automatically deleted.
 
 Clean saved tabs in unnamed sessions reload current disk contents at restart; named workspaces restore their captured contents. Modified tabs restore recovery
-contents; saving warns if the original file has changed externally. Files are read and saved
-as UTF-8, preserving existing newline contents. Other encodings and binary files are not supported.
+contents; saving warns if the original file has changed externally. Text encoding is detected when opening files, including UTF-8, UTF-16, Windows-1252, and Mac Roman. Existing files retain their detected encoding when saved; new files and Save As use UTF-8 for sharing between macOS and Linux. Existing newline contents are preserved. Binary files are not supported.
 
 ## Syntax highlighting
 
@@ -97,7 +96,7 @@ wide Unicode characters and selections through the middle of tabs have not been 
 - `Session.swift`: document/session models, recovery store, file actions, tabs, settings and highlighting.
 - `BlockTextView.swift`: custom rectangular selection and multi-row edits.
 - `Workspace.swift`: folder explorer, split view and named-workspace storage/restoration.
-- `SelfTests.swift`: focused executable checks (29 checks).
+- `SelfTests.swift`: focused executable checks (41 checks).
 - `Info.plist`: application identity and native `.medit-workspace` association.
 - `Resources/AppIcon.icns`: macOS icon, packaged from the existing gedit blue-plus icon on Scopuli.
   `AppIconSource.png` preserves the original source asset.
