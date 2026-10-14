@@ -132,10 +132,13 @@ final class FolderSidebarController: NSViewController, NSOutlineViewDataSource, 
         folderTitle.font = interfaceFont; folderTitle.lineBreakMode = .byTruncatingMiddle
         message.font = interfaceFont; message.textColor = .secondaryLabelColor
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("files")); column.title = "Files"; outline.addTableColumn(column); outline.outlineTableColumn = column
+        column.minWidth = 80; column.resizingMask = .autoresizingMask
+        let gitColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("git")); gitColumn.width = 28; gitColumn.minWidth = 28; gitColumn.maxWidth = 28; gitColumn.resizingMask = []; outline.addTableColumn(gitColumn)
+        outline.gridStyleMask = []; outline.autoresizesOutlineColumn = false
         outline.headerView = nil; outline.dataSource = self; outline.delegate = self; outline.target = self; outline.doubleAction = #selector(openDoubleClickedFile)
         outline.rowHeight = 27; outline.indentationPerLevel = 15; outline.backgroundColor = EditorPalette.workspaceSidebar
-        outline.selectionHighlightStyle = .regular; outline.columnAutoresizingStyle = .lastColumnOnlyAutoresizingStyle
-        let scroll = NSScrollView(); scroll.documentView = outline; scroll.hasVerticalScroller = true; scroll.hasHorizontalScroller = true; scroll.autohidesScrollers = true; scroll.backgroundColor = EditorPalette.workspaceSidebar
+        outline.selectionHighlightStyle = .regular; outline.columnAutoresizingStyle = .firstColumnOnlyAutoresizingStyle
+        let scroll = NSScrollView(); scroll.documentView = outline; scroll.hasVerticalScroller = true; scroll.hasHorizontalScroller = false; scroll.autohidesScrollers = true; scroll.backgroundColor = EditorPalette.workspaceSidebar
         [folderTitle, refresh, hide, scroll, message].forEach { host.addSubview($0); $0.translatesAutoresizingMaskIntoConstraints = false }
         NSLayoutConstraint.activate([
             folderTitle.leadingAnchor.constraint(equalTo: host.leadingAnchor, constant: 12), folderTitle.topAnchor.constraint(equalTo: host.topAnchor, constant: 12), folderTitle.trailingAnchor.constraint(equalTo: refresh.leadingAnchor, constant: -8),
@@ -151,7 +154,7 @@ final class FolderSidebarController: NSViewController, NSOutlineViewDataSource, 
     }
     func reloadGitRows() {
         let rows = IndexSet(integersIn: 0..<outline.numberOfRows)
-        outline.reloadData(forRowIndexes: rows, columnIndexes: IndexSet(integer: 0))
+        outline.reloadData(forRowIndexes: rows, columnIndexes: IndexSet(integersIn: 0..<2))
     }
     func updateGitPreference() { gitStatus.configure(folder: root?.url.path, enabled: GitStatusMonitor.preferenceEnabled) }
     func refreshGitStatus() { gitStatus.refresh() }
@@ -214,17 +217,21 @@ final class FolderSidebarController: NSViewController, NSOutlineViewDataSource, 
         field.font = interfaceFont; field.lineBreakMode = .byTruncatingMiddle
         let icon = NSImageView(); icon.image = NSImage(systemSymbolName: node.directory ? "folder" : "doc.text", accessibilityDescription: node.directory ? "Folder" : "File")
         cell.textField = field; cell.imageView = icon; cell.toolTip = node.url.path
-        let badge = NSTextField(labelWithString: "")
-        badge.font = NSFont.monospacedSystemFont(ofSize: max(11, interfaceFont.pointSize - 2), weight: .semibold)
-        badge.alignment = .center
-        if let status = gitStatus.snapshot.status(for: node.url.path, directory: node.directory) {
-            badge.stringValue = status.symbol; badge.textColor = status.color
-            let explanation = node.directory ? "Git: changes inside this folder (\(status.symbol))" : status.explanation
-            badge.toolTip = explanation; badge.setAccessibilityLabel(explanation)
-            cell.toolTip = node.url.path + "\n" + explanation
+        if tableColumn?.identifier.rawValue == "git" {
+            let badge = NSTextField(labelWithString: "")
+            badge.font = NSFont.monospacedSystemFont(ofSize: max(11, interfaceFont.pointSize - 2), weight: .semibold); badge.alignment = .center
+            if gitStatus.enabled, let status = gitStatus.snapshot.status(for: node.url.path, directory: node.directory) {
+                badge.stringValue = status.symbol; badge.textColor = status.color
+                let explanation = node.directory ? "Git: changes inside this folder (\(status.symbol))" : status.explanation
+                badge.toolTip = explanation; badge.setAccessibilityLabel(explanation); cell.toolTip = node.url.path + "\n" + explanation
+            }
+            cell.textField = badge; cell.imageView = nil
+            cell.addSubview(badge); badge.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([badge.leadingAnchor.constraint(equalTo: cell.leadingAnchor), badge.trailingAnchor.constraint(equalTo: cell.trailingAnchor), badge.centerYAnchor.constraint(equalTo: cell.centerYAnchor)])
+            return cell
         }
-        [icon, field, badge].forEach { cell.addSubview($0); $0.translatesAutoresizingMaskIntoConstraints = false }
-        NSLayoutConstraint.activate([icon.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 2), icon.centerYAnchor.constraint(equalTo: cell.centerYAnchor), icon.widthAnchor.constraint(equalToConstant: 18), icon.heightAnchor.constraint(equalToConstant: 18), field.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 6), field.trailingAnchor.constraint(equalTo: badge.leadingAnchor, constant: -4), badge.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -6), badge.centerYAnchor.constraint(equalTo: cell.centerYAnchor), badge.widthAnchor.constraint(equalToConstant: badge.stringValue.isEmpty ? 0 : 18), field.centerYAnchor.constraint(equalTo: cell.centerYAnchor)])
+        [icon, field].forEach { cell.addSubview($0); $0.translatesAutoresizingMaskIntoConstraints = false }
+        NSLayoutConstraint.activate([icon.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 2), icon.centerYAnchor.constraint(equalTo: cell.centerYAnchor), icon.widthAnchor.constraint(equalToConstant: 18), icon.heightAnchor.constraint(equalToConstant: 18), field.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 6), field.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -6), field.centerYAnchor.constraint(equalTo: cell.centerYAnchor)])
         return cell
     }
     @objc func openDoubleClickedFile() {
@@ -278,7 +285,7 @@ extension AppDelegate {
         loading = false; loadActiveDocument()
     }
     func applyWorkspaceLayout(_ state: SidebarState?) {
-        sidebarController.interfaceFont = interfaceFont
+        sidebarController.interfaceFont = sidebarFont
         sidebarController.setFolder(workspace, state: state)
         sidebarWidth = CGFloat(max(160, state?.width ?? 240))
         sidebarItem.isCollapsed = workspace == nil || state?.hidden == true

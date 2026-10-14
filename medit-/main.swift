@@ -72,7 +72,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
     let gutter = LineGutter()
     let position = NSTextField(labelWithString: "Ln 1, Col 1")
     let documentHost = NSView()
-    var interfaceFont: NSFont { NSFont(name: UserDefaults.standard.string(forKey: "interfaceFont") ?? "Cantarell", size: CGFloat(UserDefaults.standard.double(forKey: "interfaceSize").nonzero(17))) ?? NSFont.systemFont(ofSize: CGFloat(UserDefaults.standard.double(forKey: "interfaceSize").nonzero(17))) }
+    let tabWidthControl = NSPopUpButton(frame: .zero, pullsDown: false)
+    let spacesControl = NSButton(checkboxWithTitle: "Spaces", target: nil, action: nil)
+    let spellingControl = NSButton(checkboxWithTitle: "Spelling", target: nil, action: nil)
+    var colorDocumentID: UUID?
+    var colorPreferenceKey: String?
+    var tabFont: NSFont { resizedInterfaceFont(UserDefaults.standard.double(forKey: "tabSize").nonzero(15.3)) }
+    var sidebarFont: NSFont { resizedInterfaceFont(UserDefaults.standard.double(forKey: "sidebarSize").nonzero(17.85)) }
+    func resizedInterfaceFont(_ size: Double) -> NSFont { NSFont(name: interfaceFont.fontName, size: CGFloat(size)) ?? NSFont.systemFont(ofSize: CGFloat(size)) }
+    var interfaceFont: NSFont { NSFont(name: UserDefaults.standard.string(forKey: "interfaceFont") ?? "System", size: CGFloat(UserDefaults.standard.double(forKey: "interfaceSize").nonzero(15.3))) ?? NSFont.systemFont(ofSize: CGFloat(UserDefaults.standard.double(forKey: "interfaceSize").nonzero(15.3))) }
     func applicationDidFinishLaunching(_ notification: Notification) {
         if self === delegate, let flag = CommandLine.arguments.firstIndex(of: "--session-directory"), CommandLine.arguments.indices.contains(flag + 1) {
             store = RecoveryStore(directory: URL(fileURLWithPath: CommandLine.arguments[flag + 1]))
@@ -118,8 +126,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         }
         [gutterScroll, scroll].forEach { documentHost.addSubview($0); $0.translatesAutoresizingMaskIntoConstraints = false }
         let status = NSView(); status.wantsLayer = true; status.layer?.backgroundColor = EditorPalette.sides.cgColor
-        let labels = [language, NSTextField(labelWithString: "Tab Width: 2 ▾"), position, NSTextField(labelWithString: "INS")]
-        labels.forEach { $0.font = interfaceFont }
+        tabWidthControl.addItems(withTitles: ["Tab Width: 2", "Tab Width: 4", "Tab Width: 8"])
+        tabWidthControl.target = self; tabWidthControl.action = #selector(changeTabWidth(_:))
+        spacesControl.target = self; spacesControl.action = #selector(changeSpaces(_:))
+        spellingControl.target = self; spellingControl.action = #selector(changeSpelling(_:))
+        let languageClick = NSClickGestureRecognizer(target: self, action: #selector(showLanguageMenu(_:))); language.addGestureRecognizer(languageClick)
+        let labels: [NSView] = [language, tabWidthControl, spacesControl, spellingControl, position, NSTextField(labelWithString: "INS")]
+        labels.forEach { if let field = $0 as? NSTextField { field.font = interfaceFont }; if let button = $0 as? NSButton { button.font = interfaceFont } }
         let statusItems = NSStackView(views: labels); statusItems.spacing = 28; status.addSubview(statusItems); statusItems.translatesAutoresizingMaskIntoConstraints = false
         let editorPane = NSView()
         [tabs, documentHost].forEach { editorPane.addSubview($0); $0.translatesAutoresizingMaskIntoConstraints = false }
@@ -137,7 +150,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
             header.topAnchor.constraint(equalTo: root.topAnchor), header.leadingAnchor.constraint(equalTo: root.leadingAnchor), header.trailingAnchor.constraint(equalTo: root.trailingAnchor), header.heightAnchor.constraint(equalToConstant: 62),
             left.leadingAnchor.constraint(equalTo: header.leadingAnchor, constant: 16), left.centerYAnchor.constraint(equalTo: header.centerYAnchor), right.trailingAnchor.constraint(equalTo: header.trailingAnchor, constant: -16), right.centerYAnchor.constraint(equalTo: header.centerYAnchor),
             workspaceSplit.view.topAnchor.constraint(equalTo: header.bottomAnchor), workspaceSplit.view.leadingAnchor.constraint(equalTo: root.leadingAnchor), workspaceSplit.view.trailingAnchor.constraint(equalTo: root.trailingAnchor), workspaceSplit.view.bottomAnchor.constraint(equalTo: status.topAnchor),
-            tabs.topAnchor.constraint(equalTo: editorPane.topAnchor), tabs.leadingAnchor.constraint(equalTo: editorPane.leadingAnchor), tabs.trailingAnchor.constraint(equalTo: editorPane.trailingAnchor), tabs.heightAnchor.constraint(equalToConstant: 39 + NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy)),
+            tabs.topAnchor.constraint(equalTo: editorPane.topAnchor), tabs.leadingAnchor.constraint(equalTo: editorPane.leadingAnchor), tabs.trailingAnchor.constraint(equalTo: editorPane.trailingAnchor), tabs.heightAnchor.constraint(equalToConstant: 34 + NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy)),
             documentHost.topAnchor.constraint(equalTo: tabs.bottomAnchor), documentHost.leadingAnchor.constraint(equalTo: editorPane.leadingAnchor), documentHost.trailingAnchor.constraint(equalTo: editorPane.trailingAnchor), documentHost.bottomAnchor.constraint(equalTo: editorPane.bottomAnchor),
             gutterScroll.leadingAnchor.constraint(equalTo: documentHost.leadingAnchor), gutterScroll.topAnchor.constraint(equalTo: documentHost.topAnchor), gutterScroll.bottomAnchor.constraint(equalTo: documentHost.bottomAnchor), gutterScroll.widthAnchor.constraint(equalToConstant: 54),
             scroll.leadingAnchor.constraint(equalTo: gutterScroll.trailingAnchor), scroll.trailingAnchor.constraint(equalTo: documentHost.trailingAnchor), scroll.topAnchor.constraint(equalTo: documentHost.topAnchor), scroll.bottomAnchor.constraint(equalTo: documentHost.bottomAnchor),
@@ -145,10 +158,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         ])
         if !window.setFrameUsingName("MainWindow") { window.center() }; window.makeKeyAndOrderFront(nil); window.makeFirstResponder(editor); NSApp.activate(ignoringOtherApps: true)
         restoreSession()
+        if self === delegate, !CommandLine.arguments.contains("--self-test"),
+           UserDefaults.standard.object(forKey: "showWelcomeOnStartup") as? Bool ?? true { showWelcome() }
+        else if !(UserDefaults.standard.object(forKey: "showWelcomeOnStartup") as? Bool ?? true) { dismissWelcome() }
         applyFonts()
         gitTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in self?.sidebarController.refreshGitStatus() }
         recoveryTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.persistSession() }
         refresh()
+        if self === delegate, let flag = CommandLine.arguments.firstIndex(of: "--preview"), CommandLine.arguments.indices.contains(flag + 1) {
+            let destination = URL(fileURLWithPath: CommandLine.arguments[flag + 1])
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                if let view = self.window.contentView, let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
+                    view.cacheDisplay(in: view.bounds, to: bitmap)
+                    if let data = bitmap.representation(using: .png, properties: [:]) { try? data.write(to: destination, options: .atomic) }
+                }
+                NSApp.terminate(nil)
+            }
+        }
         if self === delegate, !CommandLine.arguments.contains("--self-test"),
            let data = try? Data(contentsOf: store.directory.appendingPathComponent("windows.json")),
            let paths = try? JSONDecoder().decode([String].self, from: data) {
@@ -172,6 +198,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         let lines = prefix.components(separatedBy: "\n")
         position.stringValue = "Ln \(lines.count), Col \((lines.last ?? "").count + 1)"
         gutter.needsDisplay = true
+        refreshEditingControls()
 
     }
     func buildMenu() {

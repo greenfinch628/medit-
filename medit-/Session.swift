@@ -24,6 +24,11 @@ struct EditorDocument: Codable {
     var scrollX: Double?
     var selectionLength: Int?
     var diskChanged: Bool?
+    var tabWidth: Int?
+    var insertSpaces: Bool?
+    var tabColor: String?
+    var languageOverride: String?
+    var ignoredSpellingWords: [String]?
     var pinned: Bool? // Optional for compatibility with existing recovery snapshots.
     var dirty: Bool { text != savedText || diskChanged == true }
 }
@@ -42,7 +47,7 @@ final class RecoveryStore {
     let directory: URL
     var sessionURL: URL { directory.appendingPathComponent("session.json") }
     init(directory override: URL? = nil) {
-        directory = override ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("medit-", isDirectory: true)
+        directory = override ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent(Bundle.main.bundleIdentifier?.hasSuffix(".review") == true ? "medit-next-review" : "medit-", isDirectory: true)
     }
     func load() throws -> EditorSession? {
         guard FileManager.default.fileExists(atPath: sessionURL.path) else { return nil }
@@ -74,6 +79,9 @@ extension AppDelegate {
     func captureDocument() {
         guard !loading, documents.indices.contains(activeIndex) else { return }
         documents[activeIndex].text = editor.string
+        documents[activeIndex].ignoredSpellingWords = editor.ignoredSpellingWords.sorted()
+        documents[activeIndex].tabWidth = editor.tabWidth
+        documents[activeIndex].insertSpaces = editor.insertSpaces
         documents[activeIndex].cursor = editor.selectedRange().location
         documents[activeIndex].selectionLength = editor.selectedRange().length
         documents[activeIndex].scrollX = Double(editor.visibleRect.minX)
@@ -112,6 +120,11 @@ extension AppDelegate {
         editor.enclosingScrollView?.reflectScrolledClipView(editor.enclosingScrollView!.contentView)
         loading = false
         updateWorkspaceTitle()
+        let width = documents[activeIndex].tabWidth ?? defaultTabWidth
+        editor.tabWidth = [2,4,8].contains(width) ? width : 2
+        editor.insertSpaces = documents[activeIndex].insertSpaces ?? UserDefaults.standard.bool(forKey: "insertSpaces")
+        editor.ignoredSpellingWords = Set(documents[activeIndex].ignoredSpellingWords ?? [])
+        editor.spellingDidChange = { [weak self] in self?.captureDocument(); self?.applySpelling(); self?.persistSession() }
         applyEditorParagraph(); highlight(); rebuildTabs(); refresh(); window.makeFirstResponder(editor)
     }
     func rebuildTabs() {
@@ -122,21 +135,29 @@ extension AppDelegate {
             tab.layer?.cornerRadius = 8
             tab.layer?.maskedCorners = [.layerMinXMaxYCorner, .layerMaxXMaxYCorner]
             tab.layer?.borderWidth = 1; tab.layer?.borderColor = NSColor.separatorColor.cgColor
-            tab.layer?.backgroundColor = (index == activeIndex ? EditorPalette.activeTab : EditorPalette.inactiveTab).cgColor
+            tab.layer?.backgroundColor = tabBackground(doc, active: index == activeIndex).cgColor
+            tab.menu = tabColorMenu(doc.id)
             let select = DraggableTabButton(title: (doc.dirty ? "*" : "") + doc.title, target: self, action: #selector(selectTab(_:)))
-            select.isBordered = false; select.font = interfaceFont; select.tag = index; select.toolTip = doc.path ?? doc.title
+            select.isBordered = false; select.font = tabFont; select.tag = index; select.toolTip = doc.path ?? doc.title
+            let tabColor = tabBackground(doc, active: index == activeIndex).usingColorSpace(.sRGB) ?? .white
+            let darkness = tabColor.redComponent * 0.299 + tabColor.greenComponent * 0.587 + tabColor.blueComponent * 0.114
+            select.attributedTitle = NSAttributedString(string: select.title, attributes: [.font: tabFont, .foregroundColor: darkness < 0.5 ? NSColor.white : NSColor.black])
             let close = NSButton(image: NSImage(systemSymbolName: "xmark", accessibilityDescription: "Close \(doc.title)")!, target: self, action: #selector(closeTab(_:)))
             close.isBordered = false; close.tag = index; close.isHidden = doc.pinned == true
             let pinTitle = doc.pinned == true ? "Unpin \(doc.title)" : "Pin \(doc.title)"
             let pin = NSButton(image: NSImage(systemSymbolName: doc.pinned == true ? "pin.fill" : "pin", accessibilityDescription: pinTitle)!, target: self, action: #selector(toggleTabPin(_:)))
             pin.isBordered = false; pin.tag = index; pin.toolTip = pinTitle; pin.setAccessibilityLabel(pinTitle)
+            select.menu = tab.menu; pin.menu = tab.menu; close.menu = tab.menu
+            let foreground = darkness < 0.5 ? NSColor.white : NSColor.black
+            let symbolColor = NSImage.SymbolConfiguration(paletteColors: [foreground])
+            pin.image = pin.image?.withSymbolConfiguration(symbolColor); close.image = close.image?.withSymbolConfiguration(symbolColor)
             let indicator = NSView(); indicator.wantsLayer = true; indicator.layer?.backgroundColor = (index == activeIndex ? NSColor.systemBlue : NSColor.clear).cgColor
             [select, pin, close, indicator].forEach { tab.addSubview($0); $0.translatesAutoresizingMaskIntoConstraints = false }
-            NSLayoutConstraint.activate([tab.heightAnchor.constraint(equalToConstant: 36), tab.widthAnchor.constraint(equalToConstant: max(220, min(360, select.intrinsicContentSize.width + 96))), select.leadingAnchor.constraint(equalTo: tab.leadingAnchor, constant: 16), select.centerYAnchor.constraint(equalTo: tab.centerYAnchor), select.trailingAnchor.constraint(lessThanOrEqualTo: pin.leadingAnchor, constant: -10), pin.trailingAnchor.constraint(equalTo: close.leadingAnchor, constant: -8), pin.centerYAnchor.constraint(equalTo: tab.centerYAnchor), pin.widthAnchor.constraint(equalToConstant: 18), close.trailingAnchor.constraint(equalTo: tab.trailingAnchor, constant: -14), close.centerYAnchor.constraint(equalTo: tab.centerYAnchor), indicator.leadingAnchor.constraint(equalTo: tab.leadingAnchor), indicator.trailingAnchor.constraint(equalTo: tab.trailingAnchor), indicator.bottomAnchor.constraint(equalTo: tab.bottomAnchor), indicator.heightAnchor.constraint(equalToConstant: 3)])
+            NSLayoutConstraint.activate([tab.heightAnchor.constraint(equalToConstant: 30), tab.widthAnchor.constraint(equalToConstant: max(220, min(360, select.intrinsicContentSize.width + 96))), select.leadingAnchor.constraint(equalTo: tab.leadingAnchor, constant: 16), select.centerYAnchor.constraint(equalTo: tab.centerYAnchor), select.trailingAnchor.constraint(lessThanOrEqualTo: pin.leadingAnchor, constant: -10), pin.trailingAnchor.constraint(equalTo: close.leadingAnchor, constant: -8), pin.centerYAnchor.constraint(equalTo: tab.centerYAnchor), pin.widthAnchor.constraint(equalToConstant: 18), close.trailingAnchor.constraint(equalTo: tab.trailingAnchor, constant: -14), close.centerYAnchor.constraint(equalTo: tab.centerYAnchor), indicator.leadingAnchor.constraint(equalTo: tab.leadingAnchor), indicator.trailingAnchor.constraint(equalTo: tab.trailingAnchor), indicator.bottomAnchor.constraint(equalTo: tab.bottomAnchor), indicator.heightAnchor.constraint(equalToConstant: 3)])
             tabItems.addArrangedSubview(tab)
         }
         tabItems.layoutSubtreeIfNeeded()
-        tabItems.setFrameSize(NSSize(width: tabItems.fittingSize.width, height: 36))
+        tabItems.setFrameSize(NSSize(width: tabItems.fittingSize.width, height: 30))
         tabItems.layoutSubtreeIfNeeded()
         if tabItems.arrangedSubviews.indices.contains(activeIndex) { tabItems.scrollToVisible(tabItems.arrangedSubviews[activeIndex].frame) }
     }
@@ -152,6 +173,7 @@ extension AppDelegate {
     @objc func toggleTabPin(_ sender: NSButton) { togglePin(at: sender.tag) }
     func togglePin(at index: Int) {
         guard documents.indices.contains(index) else { return }
+        if documents[index].pinned == true && isWelcome(documents[index]) { setWelcomeEnabled(false); return }
         captureDocument()
         let activeID = documents[activeIndex].id
         var document = documents.remove(at: index)
@@ -236,6 +258,7 @@ extension AppDelegate {
     @objc func closeActiveTab() { closeDocument(activeIndex) }
     @objc func closeTab(_ sender: NSButton) { closeDocument(sender.tag) }
     func closeDocument(_ index: Int) {
+        if documents.indices.contains(index), isWelcome(documents[index]) { setWelcomeEnabled(false); return }
         guard approveClose(index) else { return }
         do { if documents[index].dirty || documents[index].path == nil { try store.archive(documents[index]) } } catch { report(error); return }
         documents.remove(at: index)
@@ -298,15 +321,15 @@ extension AppDelegate {
     }
     func applyEditorParagraph() {
         let paragraph = NSMutableParagraphStyle(); paragraph.tabStops = []
-        paragraph.defaultTabInterval = 2 * ("M" as NSString).size(withAttributes: [.font: editor.font!]).width
+        paragraph.defaultTabInterval = CGFloat(editor.tabWidth) * ("M" as NSString).size(withAttributes: [.font: editor.font!]).width
         editor.defaultParagraphStyle = paragraph
         editor.textStorage?.addAttribute(.paragraphStyle, value: paragraph, range: NSRange(location: 0, length: (editor.string as NSString).length))
     }
     func applyFonts() {
         let d = UserDefaults.standard
-        editor.font = NSFont(name: d.string(forKey: "editorFont") ?? "Menlo", size: CGFloat(d.double(forKey: "editorSize").nonzero(16))) ?? NSFont.monospacedSystemFont(ofSize: 16, weight: .regular)
+        editor.font = NSFont(name: d.string(forKey: "editorFont") ?? "Menlo", size: CGFloat(d.double(forKey: "editorSize").nonzero(14.4))) ?? NSFont.monospacedSystemFont(ofSize: 14.4, weight: .regular)
         let paragraph = NSMutableParagraphStyle(); paragraph.tabStops = []
-        paragraph.defaultTabInterval = 2 * ("M" as NSString).size(withAttributes: [.font: editor.font!]).width
+        paragraph.defaultTabInterval = CGFloat(editor.tabWidth) * ("M" as NSString).size(withAttributes: [.font: editor.font!]).width
         editor.defaultParagraphStyle = paragraph
         editor.textStorage?.addAttribute(.paragraphStyle, value: paragraph, range: NSRange(location: 0, length: (editor.string as NSString).length))
         func visit(_ view: NSView) {
@@ -314,25 +337,103 @@ extension AppDelegate {
             if let button = view as? NSButton { button.font = interfaceFont }
             view.subviews.forEach(visit)
         }
-        if let root = window.contentView { visit(root) }; sidebarController.interfaceFont = interfaceFont; rebuildTabs(); highlight(); refresh()
+        if let root = window.contentView { visit(root) }; sidebarController.interfaceFont = sidebarFont; rebuildTabs(); highlight(); refresh()
+    }
+    func isWelcome(_ document: EditorDocument) -> Bool {
+        document.path.map { URL(fileURLWithPath: $0).workspaceNormalizedURL.path } == store.directory.appendingPathComponent("Welcome.swift").workspaceNormalizedURL.path
+    }
+    func dismissWelcome() {
+        guard !documents.isEmpty else { return }
+        captureDocument()
+        let activeID = documents[activeIndex].id
+        do {
+            for document in documents where isWelcome(document) { try store.archive(document) }
+        } catch { report(error); return }
+        documents.removeAll(where: isWelcome)
+        if documents.isEmpty { documents = [EditorDocument(title: "Untitled Document 1")] }
+        activeIndex = documents.firstIndex { $0.id == activeID } ?? 0
+        loadActiveDocument(); persistSession()
+    }
+    func setWelcomeEnabled(_ enabled: Bool) {
+        UserDefaults.standard.set(enabled, forKey: "showWelcomeOnStartup")
+        for controller in [self] + ([delegate] + delegate.additionalWindows).filter({ $0 !== self }) where !controller.windowClosed {
+            if !enabled { controller.dismissWelcome() }
+            func update(_ view: NSView) {
+                if let button = view as? NSButton, button.title == "Show Welcome on startup" { button.state = enabled ? .on : .off }
+                view.subviews.forEach(update)
+            }
+            if let content = controller.settingsWindow?.contentView { update(content) }
+        }
+        if enabled { showWelcome() }
+    }
+    @objc func showWelcome() {
+        let target = store.directory.appendingPathComponent("Welcome.swift")
+        do {
+            try FileManager.default.createDirectory(at: store.directory, withIntermediateDirectories: true)
+            guard let source = Bundle.main.url(forResource: "Welcome", withExtension: "swift") else { return }
+            let supplied = try String(contentsOf: source, encoding: .utf8)
+            let previous = supplied.replacingOccurrences(of: "// A familiar place to write, designed to be pleasant to use.\n", with: "")
+            if !FileManager.default.fileExists(atPath: target.path) || (try? String(contentsOf: target, encoding: .utf8)) == previous {
+                try supplied.write(to: target, atomically: true, encoding: .utf8)
+            }
+            openFile(target)
+            if !documents[activeIndex].dirty && documents[activeIndex].text == previous {
+                documents[activeIndex].text = supplied; documents[activeIndex].savedText = supplied; loadActiveDocument()
+            }
+            if documents[activeIndex].pinned != true { togglePin(at: activeIndex) }
+        } catch { report(error) }
+    }
+    @objc func changeWelcomeStartup(_ sender: NSButton) {
+        setWelcomeEnabled(sender.state == .on)
     }
     @objc func showSettings() {
         if let settingsWindow { settingsWindow.makeKeyAndOrderFront(nil); return }
-        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 385), styleMask: [.titled, .closable], backing: .buffered, defer: false); w.title = "medit- Preferences"; w.isReleasedWhenClosed = false
-        let stack = NSStackView(); stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 16
+        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 570, height: 440), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        w.title = "medit- Preferences"; w.isReleasedWhenClosed = false
+        let tabs = NSTabView(frame: NSRect(x: 16, y: 16, width: 538, height: 408)); tabs.autoresizingMask = [.width, .height]
         let d = UserDefaults.standard
-        for (label, key, fallback) in [("Interface font", "interfaceFont", interfaceFont.fontName.hasPrefix(".") ? "System" : interfaceFont.fontName), ("Interface size", "interfaceSize", "17"), ("Editor font", "editorFont", "Menlo"), ("Editor size", "editorSize", "16")] {
-            let title = NSTextField(labelWithString: label); title.widthAnchor.constraint(equalToConstant: 150).isActive = true
-            let input = NSTextField(string: d.string(forKey: key) ?? fallback); input.identifier = NSUserInterfaceItemIdentifier(key); input.target = self; input.action = #selector(changeSetting(_:)); input.widthAnchor.constraint(equalToConstant: 280).isActive = true
-            let row = NSStackView(views: [title, input]); row.spacing = 12; stack.addArrangedSubview(row)
+        for title in ["Fonts", "Editing", "Appearance", "Spelling"] {
+            let page = NSTabViewItem(identifier: title); page.label = title
+            let host = NSView(); page.view = host
+            let stack = NSStackView(); stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 14
+            host.addSubview(stack); stack.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([stack.leadingAnchor.constraint(equalTo: host.leadingAnchor, constant: 18), stack.topAnchor.constraint(equalTo: host.topAnchor, constant: 18), stack.trailingAnchor.constraint(lessThanOrEqualTo: host.trailingAnchor, constant: -18)])
+            func checkbox(_ label: String, value: Bool, action: Selector) {
+                let button = NSButton(checkboxWithTitle: label, target: self, action: action); button.state = value ? .on : .off; stack.addArrangedSubview(button)
+            }
+            if title == "Fonts" {
+                checkbox("Use system interface font", value: d.string(forKey: "interfaceFont") == nil || d.string(forKey: "interfaceFont") == "System" || interfaceFont.fontName.hasPrefix("."), action: #selector(changeSystemFont(_:)))
+                for (label, key, fallback) in [("Interface font", "interfaceFont", "System"), ("Interface size", "interfaceSize", "15.3"), ("Tab title size", "tabSize", "15.3"), ("Sidebar size", "sidebarSize", "17.85"), ("Editor font", "editorFont", "Menlo"), ("Editor size", "editorSize", "14.4")] {
+                    let caption = NSTextField(labelWithString: label); caption.widthAnchor.constraint(equalToConstant: 150).isActive = true
+                    let input = NSTextField(string: d.string(forKey: key) ?? fallback); input.identifier = NSUserInterfaceItemIdentifier(key); input.target = self; input.action = #selector(changeSetting(_:)); input.widthAnchor.constraint(equalToConstant: 290).isActive = true
+                    let row = NSStackView(views: [caption, input]); row.spacing = 12; stack.addArrangedSubview(row)
+                }
+                stack.addArrangedSubview(NSTextField(labelWithString: "Press Return to apply a font or size."))
+            } else if title == "Editing" {
+                let width = NSPopUpButton(frame: .zero, pullsDown: false); width.addItems(withTitles: ["Default Tab Width: 2", "Default Tab Width: 4", "Default Tab Width: 8"]); width.selectItem(at: [2,4,8].firstIndex(of: defaultTabWidth) ?? 0); width.target = self; width.action = #selector(changeDefaultTabWidth(_:)); stack.addArrangedSubview(width)
+                checkbox("Insert spaces by default", value: d.bool(forKey: "insertSpaces"), action: #selector(changeDefaultSpaces(_:)))
+                checkbox("Show Git status in sidebar", value: GitStatusMonitor.preferenceEnabled, action: #selector(changeGitStatus(_:)))
+                checkbox("Enable syntax highlighting", value: d.object(forKey: "syntaxHighlighting") as? Bool ?? true, action: #selector(changeSyntaxHighlighting(_:)))
+                stack.addArrangedSubview(NSTextField(labelWithString: "One fixed scheme; Bash uses Xcode Default Light colors."))
+                checkbox("Ask to save modified tabs when closing", value: d.bool(forKey: "promptOnClose"), action: #selector(changePrompt(_:)))
+                stack.addArrangedSubview(NSTextField(labelWithString: "Recovery copies are always kept. Bottom controls change this document."))
+            } else if title == "Appearance" {
+                checkbox("Show Welcome on startup", value: d.object(forKey: "showWelcomeOnStartup") as? Bool ?? true, action: #selector(changeWelcomeStartup(_:)))
+                for (label, key) in [("Active Tab Color…", "activeTabColor"), ("Inactive Tab Color…", "inactiveTabColor")] {
+                    let color = d.string(forKey: key).flatMap { NSColor(hexString: $0) } ?? (key == "activeTabColor" ? EditorPalette.activeTab : EditorPalette.inactiveTab)
+                    let button = NSButton(title: label, target: self, action: #selector(chooseDefaultTabColor(_:))); button.identifier = NSUserInterfaceItemIdentifier(key)
+                    let hex = NSTextField(labelWithString: color.hexString); hex.identifier = NSUserInterfaceItemIdentifier(key + "Swatch"); styleColorLabel(hex, color: color)
+                    hex.widthAnchor.constraint(equalToConstant: 110).isActive = true; hex.heightAnchor.constraint(equalToConstant: 28).isActive = true
+                    let row = NSStackView(views: [button, hex]); row.spacing = 12; stack.addArrangedSubview(row)
+                }
+                stack.addArrangedSubview(NSTextField(labelWithString: "Right-click a tab to assign its own color."))
+            } else {
+                checkbox("Enable spell checking", value: d.bool(forKey: "spellChecking"), action: #selector(changeSpelling(_:)))
+                stack.addArrangedSubview(NSTextField(labelWithString: "Uses the system English dictionary. Checks prose and Bash comments."))
+            }
+            tabs.addTabViewItem(page)
         }
-        let prompt = NSButton(checkboxWithTitle: "Ask to save modified tabs when closing", target: self, action: #selector(changePrompt(_:))); prompt.state = d.bool(forKey: "promptOnClose") ? .on : .off; stack.addArrangedSubview(prompt)
-        let git = NSButton(checkboxWithTitle: "Show Git status in sidebar", target: self, action: #selector(changeGitStatus(_:)))
-        git.state = GitStatusMonitor.preferenceEnabled ? .on : .off; stack.addArrangedSubview(git)
-        let note = NSTextField(wrappingLabelWithString: "Press Return to apply a font or size. Recovery copies are always kept. Editor fonts should be monospaced for column selection."); stack.addArrangedSubview(note)
-        w.contentView!.addSubview(stack); stack.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([stack.leadingAnchor.constraint(equalTo: w.contentView!.leadingAnchor, constant: 24), stack.trailingAnchor.constraint(equalTo: w.contentView!.trailingAnchor, constant: -24), stack.topAnchor.constraint(equalTo: w.contentView!.topAnchor, constant: 24)])
-        settingsWindow = w; w.center(); w.makeKeyAndOrderFront(nil)
+        w.contentView?.addSubview(tabs); settingsWindow = w; w.center(); w.makeKeyAndOrderFront(nil)
     }
     @objc func changeSetting(_ sender: NSTextField) {
         guard let key = sender.identifier?.rawValue else { return }
@@ -341,7 +442,7 @@ extension AppDelegate {
         } else {
             guard sender.stringValue == "System" || NSFont(name: sender.stringValue, size: 16) != nil else { NSSound.beep(); return }; UserDefaults.standard.set(sender.stringValue, forKey: key)
         }
-        applyFonts()
+        for controller in [delegate] + delegate.additionalWindows where !controller.windowClosed { controller.applyFonts() }
     }
     @objc func changeGitStatus(_ sender: NSButton) {
         UserDefaults.standard.set(sender.state == .on, forKey: "showGitStatus")
@@ -356,13 +457,24 @@ extension AppDelegate {
         let full = NSRange(location: 0, length: (editor.string as NSString).length)
         layout.removeTemporaryAttribute(.foregroundColor, forCharacterRange: full)
         let ext = documents[activeIndex].path.map { URL(fileURLWithPath: $0).pathExtension.lowercased() } ?? ""
-        let languages = ["swift": "swift", "py": "python", "js": "javascript", "ts": "typescript", "c": "c", "h": "c", "cpp": "cpp", "rs": "rust", "sh": "bash", "json": "json", "css": "css", "html": "xml", "xml": "xml", "md": "markdown", "yaml": "yaml", "yml": "yaml", "toml": "ini", "sql": "sql", "rb": "ruby", "go": "go", "java": "java"]
-        guard let name = languages[ext] else { language.stringValue = "Plain Text"; return }
+        let languages = ["swift": "swift", "py": "python", "js": "javascript", "ts": "typescript", "c": "c", "h": "c", "cpp": "cpp", "rs": "rust", "sh": "bash", "bash": "bash", "json": "json", "css": "css", "html": "xml", "xml": "xml", "md": "markdown", "yaml": "yaml", "yml": "yaml", "toml": "ini", "sql": "sql", "rb": "ruby", "go": "go", "java": "java"]
+        let override = documents[activeIndex].languageOverride
+        let inferred = languages[ext] ?? (editor.string.hasPrefix("#!/bin/bash") || editor.string.hasPrefix("#!/usr/bin/env bash") || editor.string.hasPrefix("#!/bin/sh") ? "bash" : nil)
+        guard let name = override == "Plain Text" ? nil : override.map({ $0 == "Bash" ? "bash" : $0.lowercased() }) ?? inferred else { language.stringValue = "Plain Text"; applySpelling(); return }
         language.stringValue = name == "swift" ? "Swift" : name.capitalized
+        applySpelling()
+        guard UserDefaults.standard.object(forKey: "syntaxHighlighting") as? Bool ?? true else { return }
         guard let highlighter = syntaxHighlighter else { return }
         guard let colored = highlighter.highlight(editor.string, as: name), colored.string == editor.string else { return }
         colored.enumerateAttribute(.foregroundColor, in: full) { color, range, _ in
-            if let color { layout.addTemporaryAttribute(.foregroundColor, value: color, forCharacterRange: range) }
+            if let color = color as? NSColor {
+                let palette = ["#a0a1a7": "#57765a", "#a626a4": "#75507b", "#50a14f": "#a35b19", "#986801": "#a40000", "#4078f2": "#204a87", "#e45649": "#204a87", "#c18401": "#204a87"]
+                // Xcode Default (Light) Swift token colors applied to Bash categories.
+                let xcodeBash = ["#a0a1a7": "#5d6c79", "#a626a4": "#9b2393", "#50a14f": "#c41a16", "#986801": "#1c00cf", "#4078f2": "#326d74", "#e45649": "#326d74", "#c18401": "#6c36a9"]
+                let colors = name == "bash" ? xcodeBash : palette
+                let shared = NSColor(hexString: colors[color.hexString.lowercased()] ?? (name == "bash" ? "#262626" : "#202020")) ?? .black
+                layout.addTemporaryAttribute(.foregroundColor, value: shared, forCharacterRange: range)
+            }
         }
     }
 }
@@ -415,5 +527,228 @@ final class DraggableTabButton: NSButton {
                 tab.beginDrag(with: next); return
             }
         }
+    }
+}
+
+extension NSColor {
+    convenience init?(hexString: String) {
+        let hex = hexString.hasPrefix("#") ? String(hexString.dropFirst()) : hexString
+        guard hex.count == 6, let value = UInt32(hex, radix: 16) else { return nil }
+        self.init(srgbRed: CGFloat((value >> 16) & 255) / 255, green: CGFloat((value >> 8) & 255) / 255, blue: CGFloat(value & 255) / 255, alpha: 1)
+    }
+    var hexString: String {
+        let color = usingColorSpace(.sRGB) ?? self
+        return String(format: "#%02x%02x%02x", Int((color.redComponent * 255).rounded()), Int((color.greenComponent * 255).rounded()), Int((color.blueComponent * 255).rounded()))
+    }
+}
+
+extension AppDelegate {
+    var defaultTabWidth: Int { let width = UserDefaults.standard.integer(forKey: "tabWidth"); return [2,4,8].contains(width) ? width : 2 }
+    func refreshEditingControls() {
+        tabWidthControl.selectItem(at: [2,4,8].firstIndex(of: editor.tabWidth) ?? 0)
+        spacesControl.state = editor.insertSpaces ? .on : .off
+        spellingControl.state = UserDefaults.standard.bool(forKey: "spellChecking") ? .on : .off
+    }
+    @objc func changeTabWidth(_ sender: NSPopUpButton) {
+        editor.tabWidth = [2,4,8][max(0, sender.indexOfSelectedItem)]
+        captureDocument(); applyEditorParagraph(); persistSession(); refresh()
+    }
+    @objc func changeSpaces(_ sender: NSButton) { editor.insertSpaces = sender.state == .on; captureDocument(); persistSession(); refresh() }
+    @objc func changeDefaultTabWidth(_ sender: NSPopUpButton) { UserDefaults.standard.set([2,4,8][max(0, sender.indexOfSelectedItem)], forKey: "tabWidth") }
+    @objc func changeDefaultSpaces(_ sender: NSButton) { UserDefaults.standard.set(sender.state == .on, forKey: "insertSpaces") }
+    @objc func changeSystemFont(_ sender: NSButton) {
+        UserDefaults.standard.set(sender.state == .on ? "System" : "Cantarell", forKey: "interfaceFont")
+        for controller in [delegate] + delegate.additionalWindows where !controller.windowClosed { controller.applyFonts() }
+    }
+    func tabBackground(_ doc: EditorDocument, active: Bool) -> NSColor {
+        if let hex = doc.tabColor, let color = NSColor(hexString: hex) { return color }
+        if let hex = UserDefaults.standard.string(forKey: active ? "activeTabColor" : "inactiveTabColor"), let color = NSColor(hexString: hex) { return color }
+        return active ? EditorPalette.activeTab : EditorPalette.inactiveTab
+    }
+    func tabColorMenu(_ id: UUID) -> NSMenu {
+        let menu = NSMenu()
+        let rename = menu.addItem(withTitle: "Rename…", action: #selector(renameTab(_:)), keyEquivalent: ""); rename.target = self; rename.representedObject = id.uuidString
+        menu.addItem(.separator())
+        let color = menu.addItem(withTitle: "Tab Color…", action: #selector(chooseTabColor(_:)), keyEquivalent: ""); color.target = self; color.representedObject = id.uuidString
+        let reset = menu.addItem(withTitle: "Use Default Color", action: #selector(resetTabColor(_:)), keyEquivalent: ""); reset.target = self; reset.representedObject = id.uuidString
+        return menu
+    }
+    @objc func renameTab(_ sender: NSMenuItem) {
+        guard let text = sender.representedObject as? String, let id = UUID(uuidString: text), let index = documents.firstIndex(where: { $0.id == id }) else { return }
+        if documents[index].path == nil && workspace == nil { _ = save(index: index, asNew: true); return }
+        let alert = NSAlert(); alert.messageText = "Rename File"; alert.informativeText = "Enter a file name. Untitled documents are saved in the sidebar folder."
+        let field = NSTextField(string: documents[index].path.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "")
+        field.frame = NSRect(x: 0, y: 0, width: 320, height: 24); alert.accessoryView = field
+        alert.addButton(withTitle: "Rename"); alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        do { try renameDocument(id, to: field.stringValue) } catch { report(error) }
+    }
+    func renameDocument(_ id: UUID, to name: String) throws {
+        guard let index = documents.firstIndex(where: { $0.id == id }) else { return }
+        func invalid(_ message: String) -> NSError { NSError(domain: "medit.rename", code: 1, userInfo: [NSLocalizedDescriptionKey: message]) }
+        guard !name.isEmpty, name != ".", name != "..", !name.contains("/"), !name.contains("\\"), !name.contains("\0") else { throw invalid("Enter a file name without folder separators.") }
+        let old = documents[index].path.map { URL(fileURLWithPath: $0).workspaceNormalizedURL }
+        guard let directory = old?.deletingLastPathComponent() ?? workspace.map({ URL(fileURLWithPath: $0).workspaceNormalizedURL }) else { throw invalid("Open a folder or use Save As to choose a location.") }
+        let target = directory.appendingPathComponent(name)
+        if old?.path == target.path { return }
+        // Check symlinks too, including dangling links; moveItem also refuses races.
+        guard (try? FileManager.default.attributesOfItem(atPath: target.path)) == nil else { throw invalid("A file or folder with that name already exists.") }
+        let peers = ([self] + ([delegate] + delegate.additionalWindows).filter { $0 !== self }).filter { !$0.windowClosed && !$0.documents.isEmpty }
+        for controller in peers {
+            controller.captureDocument()
+            if controller.documents.contains(where: { $0.path.map { URL(fileURLWithPath: $0).workspaceNormalizedURL.path } == target.path }) { throw invalid("That file is already open in another tab.") }
+            try controller.saveCurrentSessionBeforeSwitch()
+        }
+        if let old { try FileManager.default.moveItem(at: old, to: target) }
+        else {
+            let temporary = directory.appendingPathComponent(".medit-new-" + UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: temporary) }
+            try documents[index].text.write(to: temporary, atomically: true, encoding: .utf8)
+            try FileManager.default.moveItem(at: temporary, to: target)
+            documents[index].savedText = documents[index].text; documents[index].textEncoding = String.Encoding.utf8.rawValue
+        }
+        for controller in peers {
+            for i in controller.documents.indices {
+                let path = controller.documents[i].path.map { URL(fileURLWithPath: $0).workspaceNormalizedURL.path }
+                if (controller === self && controller.documents[i].id == id) || (old != nil && path == old!.path) {
+                    controller.documents[i].path = target.path; controller.documents[i].title = name
+                }
+            }
+            controller.rebuildTabs(); controller.highlight(); controller.sidebarController.refreshTree()
+        }
+        for controller in peers { try controller.saveCurrentSessionBeforeSwitch() }
+        if let old {
+            var roots = Set(peers.map { $0.store.directory.path })
+            for controller in peers { roots.insert(controller.folderStore.directory.path) }
+            for root in roots { try updateRenamedRecovery(in: URL(fileURLWithPath: root), from: old, to: target) }
+        }
+        if let old {
+            var entries = UserDefaults.standard.array(forKey: "recentItems") as? [[String: String]] ?? []
+            entries.removeAll { $0["path"].map { URL(fileURLWithPath: $0).workspaceNormalizedURL.path } == old.path }
+            UserDefaults.standard.set(entries, forKey: "recentItems")
+        }
+        rememberRecent(target, folder: false)
+    }
+    func updateRenamedRecovery(in root: URL, from old: URL, to target: URL) throws {
+        guard let files = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil) else { return }
+        for case let file as URL in files where file.pathExtension == "json" && !file.lastPathComponent.contains(".corrupt-") {
+            guard let data = try? Data(contentsOf: file), var record = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { continue }
+            var changed = false
+            func update(_ original: [String: Any]) -> [String: Any] {
+                var document = original
+                if let path = document["path"] as? String, URL(fileURLWithPath: path).workspaceNormalizedURL.path == old.path {
+                    document["path"] = target.path; document["title"] = target.lastPathComponent; changed = true
+                }
+                return document
+            }
+            if let documents = record["documents"] as? [[String: Any]] { record["documents"] = documents.map(update) }
+            else { record = update(record) }
+            if var sidebar = record["sidebar"] as? [String: Any], let path = sidebar["selectedPath"] as? String, URL(fileURLWithPath: path).workspaceNormalizedURL.path == old.path {
+                sidebar["selectedPath"] = target.path; record["sidebar"] = sidebar; changed = true
+            }
+            if changed { try JSONSerialization.data(withJSONObject: record, options: [.sortedKeys]).write(to: file, options: .atomic) }
+        }
+    }
+    @objc func chooseTabColor(_ sender: NSMenuItem) {
+        guard let text = sender.representedObject as? String, let id = UUID(uuidString: text), let doc = documents.first(where: { $0.id == id }) else { return }
+        colorDocumentID = id; colorPreferenceKey = nil
+        let panel = NSColorPanel.shared; panel.showsAlpha = false; panel.color = tabBackground(doc, active: true); panel.setTarget(self); panel.setAction(#selector(applyTabColor(_:))); panel.makeKeyAndOrderFront(nil)
+    }
+    @objc func resetTabColor(_ sender: NSMenuItem) {
+        guard let text = sender.representedObject as? String, let id = UUID(uuidString: text), let index = documents.firstIndex(where: { $0.id == id }) else { return }
+        documents[index].tabColor = nil; rebuildTabs(); persistSession()
+    }
+    @objc func chooseDefaultTabColor(_ sender: NSButton) {
+        guard let key = sender.identifier?.rawValue else { return }
+        colorDocumentID = nil; colorPreferenceKey = key
+        let panel = NSColorPanel.shared; panel.showsAlpha = false; panel.color = UserDefaults.standard.string(forKey: key).flatMap { NSColor(hexString: $0) } ?? (key == "activeTabColor" ? EditorPalette.activeTab : EditorPalette.inactiveTab)
+        panel.setTarget(self); panel.setAction(#selector(applyTabColor(_:))); panel.makeKeyAndOrderFront(nil)
+    }
+    @objc func applyTabColor(_ sender: NSColorPanel) {
+        if let key = colorPreferenceKey {
+            UserDefaults.standard.set(sender.color.hexString, forKey: key)
+            for controller in [delegate] + delegate.additionalWindows + [self] {
+                if let root = controller.settingsWindow?.contentView { controller.updateColorLabel(in: root, key: key, color: sender.color) }
+            }
+            for controller in [delegate] + delegate.additionalWindows where !controller.windowClosed { controller.rebuildTabs() }
+        } else if let id = colorDocumentID, let index = documents.firstIndex(where: { $0.id == id }) {
+            documents[index].tabColor = sender.color.hexString; rebuildTabs(); persistSession()
+        }
+    }
+    @objc func showLanguageMenu(_ sender: NSClickGestureRecognizer) {
+        let menu = NSMenu()
+        for title in ["Automatic", "Plain Text", "Bash", "Markdown"] {
+            let item = menu.addItem(withTitle: title, action: #selector(changeLanguage(_:)), keyEquivalent: ""); item.target = self
+        }
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: language.bounds.maxY), in: language)
+    }
+    @objc func changeLanguage(_ sender: NSMenuItem) {
+        guard documents.indices.contains(activeIndex) else { return }
+        documents[activeIndex].languageOverride = sender.title == "Automatic" ? nil : sender.title
+        highlight(); persistSession()
+    }
+    @objc func changeSpelling(_ sender: NSButton) {
+        UserDefaults.standard.set(sender.state == .on, forKey: "spellChecking")
+        for controller in [delegate] + delegate.additionalWindows where !controller.windowClosed { controller.applySpelling(); controller.refresh() }
+    }
+    func applySpelling() {
+        guard let layout = editor.layoutManager else { return }
+        let text = editor.string as NSString
+        let full = NSRange(location: 0, length: text.length)
+        editor.spellingRanges = []
+        layout.removeTemporaryAttribute(.underlineStyle, forCharacterRange: full)
+        layout.removeTemporaryAttribute(.underlineColor, forCharacterRange: full)
+        editor.isContinuousSpellCheckingEnabled = false
+        guard UserDefaults.standard.bool(forKey: "spellChecking") else { return }
+        var start = 0
+        while start < text.length {
+            let range = NSSpellChecker.shared.checkSpelling(of: editor.string, startingAt: start, language: "en_US", wrap: false, inSpellDocumentWithTag: 0, wordCount: nil)
+            guard range.location != NSNotFound, range.length > 0 else { break }
+            start = NSMaxRange(range)
+            if editor.ignoredSpellingWords.contains(text.substring(with: range).lowercased()) { continue }
+            let lineRange = text.lineRange(for: range)
+            let prefix = text.substring(with: NSRange(location: lineRange.location, length: range.location - lineRange.location))
+            if language.stringValue == "Bash" {
+                var quote: Character?; var escaped = false; var previous: Character?; var comment = false
+                for character in prefix {
+                    if escaped { escaped = false; previous = character; continue }
+                    if character == "\\" && quote != "'" { escaped = true; previous = character; continue }
+                    if let open = quote { if character == open { quote = nil } }
+                    else if character == "'" || character == "\"" { quote = character }
+                    else if character == "#" && (previous == nil || previous!.isWhitespace || previous == ";") { comment = true; break }
+                    previous = character
+                }
+                if !comment { continue }
+            }
+            if language.stringValue == "Markdown" {
+                let before = text.substring(to: range.location)
+                if before.components(separatedBy: "```").count % 2 == 0 || before.components(separatedBy: "~~~").count % 2 == 0 || prefix.filter({ $0 == "`" }).count % 2 == 1 { continue }
+            }
+            editor.spellingRanges.append(range)
+            layout.addTemporaryAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue | NSUnderlineStyle.patternDot.rawValue, forCharacterRange: range)
+            layout.addTemporaryAttribute(.underlineColor, value: NSColor.systemRed, forCharacterRange: range)
+        }
+    }
+}
+
+extension AppDelegate {
+    func styleColorLabel(_ label: NSTextField, color: NSColor) {
+        label.stringValue = color.hexString; label.drawsBackground = true; label.backgroundColor = color
+        let rgb = color.usingColorSpace(.sRGB) ?? .white
+        label.textColor = rgb.redComponent * 0.299 + rgb.greenComponent * 0.587 + rgb.blueComponent * 0.114 < 0.5 ? .white : .black
+        label.alignment = .center; label.font = .monospacedSystemFont(ofSize: 14, weight: .regular)
+    }
+    func updateColorLabel(in view: NSView, key: String, color: NSColor) {
+        if let label = view as? NSTextField, label.identifier?.rawValue == key + "Swatch" { styleColorLabel(label, color: color) }
+        view.subviews.forEach { updateColorLabel(in: $0, key: key, color: color) }
+        if let tabs = view as? NSTabView { tabs.tabViewItems.compactMap { $0.view }.forEach { updateColorLabel(in: $0, key: key, color: color) } }
+    }
+}
+
+extension AppDelegate {
+    @objc func changeSyntaxHighlighting(_ sender: NSButton) {
+        UserDefaults.standard.set(sender.state == .on, forKey: "syntaxHighlighting")
+        for controller in [delegate] + delegate.additionalWindows + [self] where !controller.windowClosed { controller.highlight() }
     }
 }

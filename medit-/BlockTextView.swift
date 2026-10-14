@@ -2,6 +2,11 @@ import AppKit
 
 /// Rectangular selection is kept separately because AppKit drops multiple empty ranges.
 final class BlockTextView: NSTextView {
+    var tabWidth = 2
+    var insertSpaces = false
+    var ignoredSpellingWords = Set<String>()
+    var spellingRanges: [NSRange] = []
+    var spellingDidChange: (() -> Void)?
     var documentUndoManager = UndoManager()
     override var undoManager: UndoManager? { documentUndoManager }
     var blockRanges: [NSRange] = [] { didSet { needsDisplay = true } }
@@ -23,7 +28,7 @@ final class BlockTextView: NSTextView {
     private func offset(_ range: NSRange, column: Int) -> (Int, Int) {
         let text = (string as NSString).substring(with: contentRange(range)); var col = 0; var utf16 = range.location
         for character in text {
-            let width = character == "\t" ? 2 - col % 2 : 1
+            let width = character == "\t" ? tabWidth - col % tabWidth : 1
             if col + width > column { break }
             col += width; utf16 += String(character).utf16.count
         }
@@ -36,7 +41,15 @@ final class BlockTextView: NSTextView {
         return (row, max(0, Int(((point.x - textContainerInset.width - (textContainer?.lineFragmentPadding ?? 0)) / width).rounded())))
     }
     override func mouseDown(with event: NSEvent) {
-        guard event.modifierFlags.contains(.option) else { blockRanges = []; anchor = nil; super.mouseDown(with: event); return }
+        guard event.modifierFlags.contains(.option) else {
+            blockRanges = []; anchor = nil
+            let position = characterIndexForInsertion(at: convert(event.locationInWindow, from: nil))
+            super.mouseDown(with: event)
+            if event.clickCount == 1, event.modifierFlags.intersection([.command, .control, .shift, .option]).isEmpty, selectedRange().length == 0, let range = spellingRanges.first(where: { NSLocationInRange(position, $0) }) {
+                showSpellingMenu(range, event: event)
+            }
+            return
+        }
         window?.makeFirstResponder(self)
         anchor = gridPoint(convert(event.locationInWindow, from: nil))
         updateBlock(at: convert(event.locationInWindow, from: nil))
@@ -125,6 +138,20 @@ final class BlockTextView: NSTextView {
         }
         replaceBlock("")
     }
+    override func insertTab(_ sender: Any?) {
+        guard insertSpaces else { super.insertTab(sender); return }
+        let column: Int
+        if !blockRanges.isEmpty { column = blockColumn }
+        else {
+            let text = string as NSString; let point = min(selectedRange().location, text.length)
+            let start = text.lineRange(for: NSRange(location: point, length: 0)).location
+            var visual = 0
+            for character in text.substring(with: NSRange(location: start, length: point - start)) { visual += character == "\t" ? tabWidth - visual % tabWidth : 1 }
+            column = visual
+        }
+        let padding = String(repeating: " ", count: tabWidth - column % tabWidth)
+        insertText(padding, replacementRange: NSRange(location: NSNotFound, length: 0))
+    }
     override func keyDown(with event: NSEvent) {
         if [123,124,125,126].contains(Int(event.keyCode)) || event.modifierFlags.contains(.command) && event.charactersIgnoringModifiers == "z" { blockRanges = []; anchor = nil }
         super.keyDown(with: event)
@@ -141,4 +168,29 @@ final class BlockTextView: NSTextView {
         replaceBlock("")
     }
     override func cancelOperation(_ sender: Any?) { blockRanges = []; anchor = nil }
+    func showSpellingMenu(_ range: NSRange, event: NSEvent) {
+        guard NSMaxRange(range) <= (string as NSString).length else { return }
+        let word = (string as NSString).substring(with: range)
+        let menu = NSMenu()
+        let guesses = NSSpellChecker.shared.guesses(forWordRange: range, in: string, language: "en_US", inSpellDocumentWithTag: 0) ?? []
+        for suggestion in guesses.prefix(8) {
+            let item = menu.addItem(withTitle: suggestion, action: #selector(correctSpelling(_:)), keyEquivalent: ""); item.target = self
+            item.representedObject = ["range": NSValue(range: range), "original": word, "replacement": suggestion]
+        }
+        if guesses.isEmpty { let item = menu.addItem(withTitle: "No suggestions", action: nil, keyEquivalent: ""); item.isEnabled = false }
+        menu.addItem(.separator())
+        let ignore = menu.addItem(withTitle: "× Ignore", action: #selector(ignoreDocumentSpelling(_:)), keyEquivalent: ""); ignore.target = self; ignore.representedObject = word
+        menu.popUp(positioning: nil, at: convert(event.locationInWindow, from: nil), in: self)
+    }
+    @objc func correctSpelling(_ sender: NSMenuItem) {
+        guard let data = sender.representedObject as? [String: Any], let value = data["range"] as? NSValue, let original = data["original"] as? String, let replacement = data["replacement"] as? String else { return }
+        let range = value.rangeValue
+        guard NSMaxRange(range) <= (string as NSString).length, (string as NSString).substring(with: range) == original else { return }
+        blockRanges = []; insertText(replacement, replacementRange: range)
+    }
+    @objc func ignoreDocumentSpelling(_ sender: NSMenuItem) {
+        guard let word = sender.representedObject as? String else { return }
+        ignoredSpellingWords.insert(word.lowercased()); spellingDidChange?()
+    }
+
 }

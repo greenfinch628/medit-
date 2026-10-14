@@ -1,4 +1,5 @@
 // Welcome to medit-
+// A familiar place to write, designed to be pleasant to use.
 // Native AppKit editing, with a gedit-inspired interface.
 // Open a file or folder, then start editing. Folder sessions are automatic.
 
@@ -12,8 +13,11 @@ struct Greeting {
     }
 }
 
-let greeting = Greeting(name: "Miller")
+let greeting = Greeting(name: "World")
 print(greeting.message())
+
+// Run this example in Terminal: swift Welcome.swift
+// Expected output: Hello, World!
 
 // Toolbar and menus
 // - Left: Open dropdown, Show/Hide Sidebar, then New Tab.
@@ -40,10 +44,11 @@ print(greeting.message())
 // - Opening an already-open file selects its existing tab.
 // - Command-S saves; Save As... chooses a new filename or location.
 // - Undo/redo, cut, copy, paste and Select All use native Mac shortcuts.
-// - Line numbers, a live line/column indicator and two-column tab stops.
+// - Line numbers, a live line/column indicator and configurable tab stops.
 // - Text encoding is detected and retained when saving existing files.
 // - New files and Save As use UTF-8. Original newline contents are preserved.
-// - Syntax highlighting follows the saved file's extension.
+// - Syntax highlighting is enabled by default and follows the file extension.
+// - Preferences > Edit can disable highlighting; both editors use one Classic scheme.
 // - Command-F opens Find; enable Replace for Replace and Replace All.
 // - Command-G finds the next match.
 // - Hold Option and drag for rectangular block selection.
@@ -75,11 +80,19 @@ print(greeting.message())
 // - Hover over a file's badge for staged/working-tree details.
 // - Status refreshes automatically, on Refresh, after saving and on app activation.
 // - Git status describes files on disk; the tab's * marks unsaved editor changes.
-// - Preferences > Show Git status in sidebar turns badges on/off for all windows.
+// - Preferences > Edit > Show Git status in sidebar turns badges on/off.
+// - Badges occupy a fixed column at the far right, without a visible divider.
 // - The preference is remembered across launches. No Git scan runs while disabled.
 // - Git indicators are read-only: they do not stage, commit or change repository files.
 //
 // Preferences and appearance
 // - Command-comma opens Preferences for independent interface/editor fonts and sizes.
 // - Optional close prompts and Git badges can be toggled in Preferences.
-// - Light gray chrome, compact folder-style tabs and the gedit blue-plus app icon.
+// - Appearance provides active/inactive tab colors with matching color swatches.
+// - Individual tabs have a Tab Color command in their context menu.
+// - Set tab width and choose tabs or spaces in the bottom controls.
+// - Enable optional spell checking in Preferences > Spelling.
+// - Single-click an underlined word for suggestions or x Ignore.
+// - Ignore applies to this document only, survives recovery, and never adds
+//   the word to any dictionary. Other documents still flag the word.
+// - Light gray chrome and compact folder-style tabs.

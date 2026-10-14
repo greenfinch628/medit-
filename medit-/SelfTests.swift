@@ -31,6 +31,14 @@ func runSelfTests() {
         check(fallback.documents[0].text == docs[0].text, "Corrupt latest snapshot falls back to previous recovery")
         let recoveryFiles = try FileManager.default.contentsOfDirectory(atPath: folder.path)
         check(recoveryFiles.contains(where: { $0.hasPrefix("session.corrupt-") }), "Corrupt snapshot preserved for diagnosis")
+        var colorDoc = EditorDocument(title: "color", text: "draft")
+        colorDoc.tabWidth = 8; colorDoc.insertSpaces = true; colorDoc.tabColor = "#d4edda"
+        let colorRoundTrip = try JSONDecoder().decode(EditorDocument.self, from: JSONEncoder().encode(colorDoc))
+        check(colorRoundTrip.tabWidth == 8 && colorRoundTrip.insertSpaces == true && colorRoundTrip.tabColor == "#d4edda", "Tab width, spaces and tab color survive recovery encoding")
+        check(NSColor(hexString: "#d4edda") != nil && NSColor(hexString: "broken") == nil, "Tab color parser accepts shared hex colors and rejects invalid colors")
+        let spacesView = BlockTextView(); spacesView.string = "a"; spacesView.setSelectedRange(NSRange(location: 1, length: 0)); spacesView.tabWidth = 4; spacesView.insertSpaces = true
+        spacesView.insertTab(nil); check(spacesView.string == "a   ", "Insert Spaces uses the next configurable tab stop")
+        spacesView.insertSpaces = false; spacesView.insertTab(nil); check(spacesView.string == "a   \t", "Disabling Insert Spaces keeps literal tabs")
         let view = BlockTextView(frame: NSRect(x: 0, y: 0, width: 600, height: 400))
         view.isRichText = false; view.allowsUndo = true; view.font = .monospacedSystemFont(ofSize: 16, weight: .regular)
         view.string = "abc\ndef"; view.blockRanges = [NSRange(location: 1, length: 1), NSRange(location: 5, length: 1)]; view.rowPadding = [0,0]
@@ -49,6 +57,43 @@ func runSelfTests() {
         let color = d.editor.layoutManager!.temporaryAttribute(.foregroundColor, atCharacterIndex: 0, effectiveRange: &range)
         check(color != nil && d.language.stringValue == "Swift", "Syntax colors use temporary attributes and detect file type")
         check(d.editor.string == "let value = 42 // comment", "Highlighting leaves document contents untouched")
+        let correctionView = BlockTextView(frame: NSRect(x: 0, y: 0, width: 400, height: 200)); correctionView.isRichText = false; correctionView.allowsUndo = true; correctionView.string = "hello speling"
+        let correction = NSMenuItem(title: "spelling", action: nil, keyEquivalent: "")
+        correction.representedObject = ["range": NSValue(range: NSRange(location: 6, length: 7)), "original": "speling", "replacement": "spelling"]
+        correctionView.correctSpelling(correction); check(correctionView.string == "hello spelling", "Spelling suggestion replaces only the clicked word")
+        var ignoredCallback = false; correctionView.spellingDidChange = { ignoredCallback = true }
+        let ignore = NSMenuItem(title: "× Ignore", action: nil, keyEquivalent: ""); ignore.representedObject = "speling"
+        correctionView.ignoreDocumentSpelling(ignore)
+        check(correctionView.ignoredSpellingWords.contains("speling") && ignoredCallback, "Ignore updates this document and requests recovery without learning a dictionary word")
+        var ignoredDoc = EditorDocument(title: "notes"); ignoredDoc.ignoredSpellingWords = ["speling"]
+        let ignoredRoundTrip = try JSONDecoder().decode(EditorDocument.self, from: JSONEncoder().encode(ignoredDoc))
+        check(ignoredRoundTrip.ignoredSpellingWords == ["speling"], "Document-local ignored words survive recovery encoding")
+        let swiftDocuments = d.documents
+        let swiftText = d.editor.string
+        let bashSample = "# comment\nif true; then\n  echo \"hello\" $value 42\nfi"
+        d.documents = [EditorDocument(title: "colors.sh", path: "/tmp/colors.sh", text: bashSample)]; d.editor.string = bashSample; d.highlight()
+        for (token, expected) in [("# comment", "#5d6c79"), ("if", "#9b2393"), ("hello", "#c41a16")] {
+            let position = (bashSample as NSString).range(of: token).location
+            let actual = d.editor.layoutManager!.temporaryAttribute(.foregroundColor, atCharacterIndex: position, effectiveRange: nil) as? NSColor
+            check(actual?.hexString.lowercased() == expected, "Bash uses Xcode Default Light color for \(token)")
+        }
+        d.documents = swiftDocuments; d.editor.string = swiftText; d.highlight()
+        let oldSyntax = UserDefaults.standard.object(forKey: "syntaxHighlighting")
+        UserDefaults.standard.set(false, forKey: "syntaxHighlighting"); d.highlight()
+        check(d.editor.layoutManager!.temporaryAttribute(.foregroundColor, atCharacterIndex: 0, effectiveRange: nil) == nil, "Syntax highlighting can be disabled")
+        UserDefaults.standard.set(true, forKey: "syntaxHighlighting"); d.highlight()
+        check(d.editor.layoutManager!.temporaryAttribute(.foregroundColor, atCharacterIndex: 0, effectiveRange: nil) != nil, "Syntax highlighting can be enabled with the shared scheme")
+        UserDefaults.standard.set(oldSyntax, forKey: "syntaxHighlighting")
+        let oldSpelling = UserDefaults.standard.object(forKey: "spellChecking")
+        UserDefaults.standard.set(true, forKey: "spellChecking")
+        d.documents = [EditorDocument(title: "notes.txt", path: "/tmp/notes.txt", text: "hello qzxqzx")]; d.editor.string = d.documents[0].text; d.highlight()
+        check(d.editor.layoutManager!.temporaryAttribute(.underlineStyle, atCharacterIndex: 6, effectiveRange: nil) != nil, "Enabled spelling underlines misspelled prose")
+        UserDefaults.standard.set(false, forKey: "spellChecking"); d.highlight()
+        check(d.editor.layoutManager!.temporaryAttribute(.underlineStyle, atCharacterIndex: 6, effectiveRange: nil) == nil, "Disabling spelling removes its underline")
+        UserDefaults.standard.set(true, forKey: "spellChecking")
+        d.documents = [EditorDocument(title: "check.sh", path: "/tmp/check.sh", text: "echo qzxqzx\n# qzxqzx")]; d.editor.string = d.documents[0].text; d.highlight()
+        check(d.editor.layoutManager!.temporaryAttribute(.underlineStyle, atCharacterIndex: 5, effectiveRange: nil) == nil && d.editor.layoutManager!.temporaryAttribute(.underlineStyle, atCharacterIndex: 15, effectiveRange: nil) != nil, "Bash spelling checks comments while leaving commands alone")
+        UserDefaults.standard.set(oldSpelling, forKey: "spellChecking")
         let workspaceStore = FolderSessionStore(directory: folder)
         let root = folder.appendingPathComponent("tree").workspaceNormalizedURL
         let subdirectory = root.appendingPathComponent("z-folder")
@@ -116,6 +161,50 @@ func runSelfTests() {
         controller.store = RecoveryStore(directory: folder.appendingPathComponent("controller"))
         controller.folderStore = FolderSessionStore(directory: controller.store.directory)
         controller.applicationDidFinishLaunching(Notification(name: NSApplication.didFinishLaunchingNotification))
+        let welcomePreference = UserDefaults.standard.object(forKey: "showWelcomeOnStartup")
+        controller.showWelcome()
+        check(controller.isWelcome(controller.documents[controller.activeIndex]) && controller.documents[controller.activeIndex].pinned == true, "Welcome opens pinned")
+        controller.editor.string += "\n// personal Welcome edit"; controller.captureDocument()
+        controller.togglePin(at: controller.activeIndex)
+        check(!controller.documents.contains(where: controller.isWelcome) && !UserDefaults.standard.bool(forKey: "showWelcomeOnStartup"), "Unpin removes Welcome and disables startup")
+        let closedWelcome = try FileManager.default.contentsOfDirectory(at: controller.store.directory.appendingPathComponent("Closed Tabs"), includingPropertiesForKeys: nil)
+        let keptWelcomeEdits = try closedWelcome.contains { try String(contentsOf: $0).contains("personal Welcome edit") }
+        check(keptWelcomeEdits, "Dismissing Welcome archives unsaved edits")
+        controller.setWelcomeEnabled(true)
+        check(controller.documents.contains(where: controller.isWelcome), "Enabling Welcome shows it again")
+        controller.setWelcomeEnabled(false)
+        check(!controller.documents.contains(where: controller.isWelcome), "Disabling Welcome removes its tab")
+        UserDefaults.standard.set(welcomePreference, forKey: "showWelcomeOnStartup")
+        controller.openFolder(root)
+        let renameSource = root.appendingPathComponent("rename-source.txt")
+        try "saved rename text".write(to: renameSource, atomically: true, encoding: .utf8)
+        controller.openFile(renameSource)
+        let renameID = controller.documents[controller.activeIndex].id
+        controller.editor.string = "unsaved rename edit"; controller.captureDocument()
+        try controller.store.archive(controller.documents[controller.activeIndex])
+        try controller.renameDocument(renameID, to: "renamed.md")
+        let renameTarget = root.appendingPathComponent("renamed.md")
+        let renameDisk = try String(contentsOf: renameTarget)
+        check(!FileManager.default.fileExists(atPath: renameSource.path) && renameDisk == "saved rename text", "Tab rename moves file without saving pending edits")
+        check(controller.documents[controller.activeIndex].path == renameTarget.path && controller.documents[controller.activeIndex].dirty && controller.editor.string == "unsaved rename edit", "Renaming preserves unsaved document and updates tab path")
+        let renameArchives = try FileManager.default.contentsOfDirectory(at: controller.store.directory.appendingPathComponent("Closed Tabs"), includingPropertiesForKeys: nil)
+        let renamedArchive = try renameArchives.contains { url in
+            let data = try Data(contentsOf: url)
+            return (try? JSONDecoder().decode(EditorDocument.self, from: data).path) == renameTarget.path
+        }
+        check(renamedArchive, "Rename updates archived recovery paths")
+        let collisionURL = root.appendingPathComponent("rename-taken.txt")
+        try "keep me".write(to: collisionURL, atomically: true, encoding: .utf8)
+        var refusedRename = false
+        do { try controller.renameDocument(renameID, to: collisionURL.lastPathComponent) } catch { refusedRename = true }
+        let collisionText = try String(contentsOf: collisionURL)
+        check(refusedRename && collisionText == "keep me", "Rename refuses an existing destination")
+        controller.newDocument(); controller.editor.string = "new named draft 🐦"; controller.captureDocument()
+        try controller.renameDocument(controller.documents[controller.activeIndex].id, to: "new named draft.txt")
+        let namedDraft = root.appendingPathComponent("new named draft.txt")
+        let namedDraftText = try String(contentsOf: namedDraft)
+        check(namedDraftText == "new named draft 🐦" && !controller.documents[controller.activeIndex].dirty && controller.documents[controller.activeIndex].path == namedDraft.path, "Naming an untitled document saves it in the sidebar folder")
+        controller.closeFolder()
         controller.recoveryTimer?.invalidate()
         defer { controller.window.orderOut(nil) }
         controller.editor.string = "loose unsaved draft"; controller.captureDocument()
@@ -216,7 +305,7 @@ func runSelfTests() {
         let overflowingScroll = controller.tabs.subviews.first as! NSScrollView
         overflowingScroll.tile()
         check(overflowingScroll.horizontalScroller?.isHidden == false, "Overflowing tabs show their horizontal scrollbar")
-        check(overflowingScroll.contentView.bounds.height >= 36 && controller.tabItems.arrangedSubviews.allSatisfy { $0.frame.height >= 36 }, "Visible scrollbar does not reduce tab height or clip tab controls")
+        check(overflowingScroll.contentView.bounds.height >= 30 && controller.tabItems.arrangedSubviews.allSatisfy { $0.frame.height >= 30 }, "Visible scrollbar does not reduce the requested shorter tab height or clip tab controls")
         let folderFiles = try FileManager.default.contentsOfDirectory(atPath: root.path)
         check(!folderFiles.contains(where: { $0.hasSuffix("medit-workspace") }), "No workspace file created inside folder")
         for encoding in [String.Encoding.utf8, .utf16, .utf16LittleEndian, .utf16BigEndian, .windowsCP1252, .macOSRoman] {
