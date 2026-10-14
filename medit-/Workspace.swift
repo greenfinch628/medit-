@@ -113,14 +113,27 @@ final class FolderNode: NSObject {
     }
 }
 
+final class SidebarOutlineView: NSOutlineView {
+    var fileContextMenu: ((NSEvent) -> NSMenu?)?
+    override func menu(for event: NSEvent) -> NSMenu? { fileContextMenu?(event) }
+}
+
+final class FolderTitleField: NSTextField {
+    var folderMenu: (() -> NSMenu?)?
+    override func menu(for event: NSEvent) -> NSMenu? { folderMenu?() }
+}
+
 final class FolderSidebarController: NSViewController, NSOutlineViewDataSource, NSOutlineViewDelegate {
-    let outline = NSOutlineView()
+    let outline = SidebarOutlineView()
     let gitStatus = GitStatusMonitor()
-    let folderTitle = NSTextField(labelWithString: "Folder")
+    let folderTitle = FolderTitleField(labelWithString: "Folder")
     let message = NSTextField(wrappingLabelWithString: "Choose Open… to open a folder")
     var root: FolderNode?
     var onOpenFile: ((URL) -> Void)?
+    var onRenameFile: ((URL) -> Void)?
+    var onDeleteFile: ((URL) -> Void)?
     var onHide: (() -> Void)?
+    var onCloseFolder: (() -> Void)?
     var interfaceFont = NSFont.systemFont(ofSize: 17) { didSet { if isViewLoaded { let saved = state(width: 240, hidden: false); folderTitle.font = interfaceFont; message.font = interfaceFont; outline.rowHeight = max(26, interfaceFont.pointSize + 10); setFolder(root?.url.path, state: saved) } } }
     private var refreshing = false
     override func loadView() {
@@ -130,11 +143,24 @@ final class FolderSidebarController: NSViewController, NSOutlineViewDataSource, 
         let hide = NSButton(title: "×", target: self, action: #selector(hideSidebar))
         hide.isBordered = false; hide.toolTip = "Hide Sidebar"; hide.setAccessibilityLabel("Hide Sidebar")
         folderTitle.font = interfaceFont; folderTitle.lineBreakMode = .byTruncatingMiddle
+        folderTitle.folderMenu = { [weak self] in self?.makeFolderMenu() }
         message.font = interfaceFont; message.textColor = .secondaryLabelColor
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("files")); column.title = "Files"; outline.addTableColumn(column); outline.outlineTableColumn = column
         column.minWidth = 80; column.resizingMask = .autoresizingMask
         let gitColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("git")); gitColumn.width = 28; gitColumn.minWidth = 28; gitColumn.maxWidth = 28; gitColumn.resizingMask = []; outline.addTableColumn(gitColumn)
         outline.gridStyleMask = []; outline.autoresizesOutlineColumn = false
+        outline.fileContextMenu = { [weak self] event in
+            guard let self else { return nil }
+            let row = self.outline.row(at: self.outline.convert(event.locationInWindow, from: nil))
+            guard let node = self.outline.item(atRow: row) as? FolderNode, !node.directory,
+                  (try? node.url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) != true else { return nil }
+            self.outline.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+            let menu = NSMenu()
+            for (title, action) in [("Rename…", #selector(self.renameSidebarFile(_:))), ("Delete…", #selector(self.deleteSidebarFile(_:)))] {
+                let item = menu.addItem(withTitle: title, action: action, keyEquivalent: ""); item.target = self; item.representedObject = node.url
+            }
+            return menu
+        }
         outline.headerView = nil; outline.dataSource = self; outline.delegate = self; outline.target = self; outline.doubleAction = #selector(openDoubleClickedFile)
         outline.rowHeight = 27; outline.indentationPerLevel = 15; outline.backgroundColor = EditorPalette.workspaceSidebar
         outline.selectionHighlightStyle = .regular; outline.columnAutoresizingStyle = .firstColumnOnlyAutoresizingStyle
@@ -152,6 +178,14 @@ final class FolderSidebarController: NSViewController, NSOutlineViewDataSource, 
         view = frame
         gitStatus.onChange = { [weak self] in self?.reloadGitRows() }
     }
+    func makeFolderMenu() -> NSMenu? {
+        guard root != nil else { return nil }
+        let menu = NSMenu()
+        let item = menu.addItem(withTitle: "Close Folder", action: #selector(closeSidebarFolder), keyEquivalent: "")
+        item.target = self
+        return menu
+    }
+    @objc func closeSidebarFolder() { guard root != nil else { return }; onCloseFolder?() }
     func reloadGitRows() {
         let rows = IndexSet(integersIn: 0..<outline.numberOfRows)
         outline.reloadData(forRowIndexes: rows, columnIndexes: IndexSet(integersIn: 0..<2))
@@ -234,6 +268,8 @@ final class FolderSidebarController: NSViewController, NSOutlineViewDataSource, 
         NSLayoutConstraint.activate([icon.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 2), icon.centerYAnchor.constraint(equalTo: cell.centerYAnchor), icon.widthAnchor.constraint(equalToConstant: 18), icon.heightAnchor.constraint(equalToConstant: 18), field.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 6), field.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -6), field.centerYAnchor.constraint(equalTo: cell.centerYAnchor)])
         return cell
     }
+    @objc func renameSidebarFile(_ sender: NSMenuItem) { if let url = sender.representedObject as? URL { onRenameFile?(url) } }
+    @objc func deleteSidebarFile(_ sender: NSMenuItem) { if let url = sender.representedObject as? URL { onDeleteFile?(url) } }
     @objc func openDoubleClickedFile() {
         guard let node = outline.item(atRow: outline.clickedRow) as? FolderNode else { return }
         if node.directory { if outline.isItemExpanded(node) { outline.collapseItem(node) } else { outline.expandItem(node) } }
@@ -288,7 +324,7 @@ extension AppDelegate {
         sidebarController.interfaceFont = sidebarFont
         sidebarController.setFolder(workspace, state: state)
         sidebarWidth = CGFloat(max(160, state?.width ?? 240))
-        sidebarItem.isCollapsed = workspace == nil || state?.hidden == true
+        sidebarItem.isCollapsed = state?.hidden ?? (workspace == nil)
         workspaceSplit.applyPaneState()
         window.contentView?.layoutSubtreeIfNeeded()
         if !sidebarItem.isCollapsed { workspaceSplit.setSidebarWidth(sidebarWidth) }
@@ -327,7 +363,12 @@ extension AppDelegate {
         do {
             let loose = try folderStore.load(nil) ?? EditorSession(documents: [], activeIndex: 0)
             try saveCurrentSessionBeforeSwitch()
-            applySession(loose); persistSession()
+            applySession(loose)
+            sidebarItem.isCollapsed = false
+            workspaceSplit.applyPaneState()
+            window.contentView?.layoutSubtreeIfNeeded()
+            workspaceSplit.setSidebarWidth(sidebarWidth)
+            persistSession()
         } catch { report(error) }
     }
     func validateMenuItem(_ item: NSMenuItem) -> Bool {

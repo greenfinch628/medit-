@@ -13,7 +13,7 @@ Built for macOS with Swift and AppKit, medit- follows the familiar gedit layout 
 - Keep documents open and report an error if recovery cannot be written.
 - Right-click a tab to rename its file. Naming an untitled document saves it in the sidebar folder; existing files are never overwritten.
 - Compact movable tabs, a fixed pinned group, individual tab colors and configurable active/inactive colors.
-- A folder sidebar with an invisible fixed column for read-only Git status badges.
+- A folder sidebar with an invisible fixed column for read-only Git status badges. Right-click its folder title and choose Close Folder to leave the sidebar empty; the folder session and unsaved drafts are preserved.
 - Native Find, Replace and Replace All, line numbers and a live line/column indicator.
 - Configurable tab width and tabs or spaces, available from the bottom controls.
 - Syntax highlighting enabled by default, with a fixed scheme and language selection. Bash uses Xcode Default (Light) Swift colors mapped to Bash tokens.
@@ -67,6 +67,8 @@ Without a rectangle, paste behaves normally. Use a monospace font for predictabl
 
 Use **Open…** to choose files or a folder; files open as tabs and an existing tab is selected rather than duplicated. Open Recent distinguishes files and folders. Expand folders with their disclosure arrows and double-click a file to open it. The toolbar sidebar button and sidebar × control show or hide the browser without closing documents. Resize it using the divider; Refresh reloads the tree. Directory symlinks are not expanded recursively.
 
+Right-click a sidebar file for **Rename…** or **Delete…**. Rename keeps unsaved edits and updates the tab and recovery references. Delete asks for confirmation before moving the file to Trash; open copies become unsaved documents so their text remains recoverable. Cancelling or a Trash failure leaves the file intact. These commands apply to files, not folders.
+
 Folder sessions remember tabs, order, pins, colors, tab settings, active document, cursor/selection, scrolling and sidebar state. Switching folders preserves the outgoing session; **Close Folder** returns to documents opened without a folder. Each window has independent recovery, and open windows return on the next launch. Session files are kept in application data, not in the folder being edited.
 
 Git badges occupy a persistent column at the far right: **M** modified, **A** added, **D** deleted, **R** renamed, **C** copied, **T** type changed, **?** untracked and **!** conflict. Folder badges summarize changes beneath them. Preferences → Editing → Show Git status in sidebar controls visibility and scanning. Status refreshes in the background, after saves, on Refresh and when returning to the app. Git status describes files on disk and never stages, commits or writes the index.
@@ -101,7 +103,7 @@ For the separate review build:
 build/review-next/Build/Products/Release/medit-.app/Contents/MacOS/medit- --self-test
 ```
 
-The current executable checks cover Unicode recovery, modified originals, closed-tab archives, corrupt snapshot fallback, folder sessions, pinned tabs, colors, spelling, highlighting, Git status, block replacement, repeated column typing, multiline block paste, short-row padding and Welcome behavior. The current review build passes 125 checks. Option-drag geometry and complex Unicode column alignment still benefit from hands-on testing.
+The current executable checks cover Unicode recovery, modified originals, closed-tab archives, corrupt snapshot fallback, folder sessions, pinned tabs, colors, spelling, highlighting, Git status, block replacement, repeated column typing, multiline block paste, short-row padding and Welcome behavior. The current review build passes 136 checks. Option-drag geometry and complex Unicode column alignment still benefit from hands-on testing.
 
 Use `--session-directory /tmp/medit-review` to isolate recovery for a test run. `--preview /tmp/medit.png` captures the application's own content and exits.
 

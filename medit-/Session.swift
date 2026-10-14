@@ -455,6 +455,13 @@ extension AppDelegate {
     func highlight() {
         guard documents.indices.contains(activeIndex), let layout = editor.layoutManager else { return }
         let full = NSRange(location: 0, length: (editor.string as NSString).length)
+        // AppKit can carry an insertion color across empty documents and appearances.
+        // Keep the stored text and future typing black; syntax colors remain temporary.
+        editor.textColor = .black
+        editor.textStorage?.addAttribute(.foregroundColor, value: NSColor.black, range: full)
+        var typing = editor.typingAttributes
+        typing[.foregroundColor] = NSColor.black
+        editor.typingAttributes = typing
         layout.removeTemporaryAttribute(.foregroundColor, forCharacterRange: full)
         let ext = documents[activeIndex].path.map { URL(fileURLWithPath: $0).pathExtension.lowercased() } ?? ""
         let languages = ["swift": "swift", "py": "python", "js": "javascript", "ts": "typescript", "c": "c", "h": "c", "cpp": "cpp", "rs": "rust", "sh": "bash", "bash": "bash", "json": "json", "css": "css", "html": "xml", "xml": "xml", "md": "markdown", "yaml": "yaml", "yml": "yaml", "toml": "ini", "sql": "sql", "rb": "ruby", "go": "go", "java": "java"]
@@ -572,6 +579,80 @@ extension AppDelegate {
         let color = menu.addItem(withTitle: "Tab Color…", action: #selector(chooseTabColor(_:)), keyEquivalent: ""); color.target = self; color.representedObject = id.uuidString
         let reset = menu.addItem(withTitle: "Use Default Color", action: #selector(resetTabColor(_:)), keyEquivalent: ""); reset.target = self; reset.representedObject = id.uuidString
         return menu
+    }
+    func renameSidebarFile(_ suppliedURL: URL) {
+        let alert = NSAlert(); alert.messageText = "Rename File"
+        let field = NSTextField(string: suppliedURL.lastPathComponent); field.frame = NSRect(x: 0, y: 0, width: 320, height: 24)
+        alert.accessoryView = field; alert.addButton(withTitle: "Rename"); alert.addButton(withTitle: "Cancel"); alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        do { try renameSidebarFile(suppliedURL, to: field.stringValue) } catch { report(error) }
+    }
+    func renameSidebarFile(_ suppliedURL: URL, to name: String) throws {
+        let source = suppliedURL.workspaceNormalizedURL
+        let peers = [self] + ([delegate] + delegate.additionalWindows).filter { $0 !== self && !$0.windowClosed }
+        for controller in peers {
+            if let document = controller.documents.first(where: { $0.path.map { URL(fileURLWithPath: $0).workspaceNormalizedURL.path } == source.path }) {
+                try controller.renameDocument(document.id, to: name); return
+            }
+        }
+        guard !name.isEmpty, name != ".", name != "..", !name.contains("/"), !name.contains("\\"), !name.contains("\0"),
+              (try? source.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) != true else { throw CocoaError(.fileWriteInvalidFileName) }
+        let target = source.deletingLastPathComponent().appendingPathComponent(name)
+        if source.path == target.path { return }
+        for controller in peers where !controller.documents.isEmpty { try controller.saveCurrentSessionBeforeSwitch() }
+        try FileManager.default.moveItem(at: source, to: target)
+        for controller in peers {
+            try controller.updateRenamedRecovery(in: controller.store.directory, from: source, to: target)
+            controller.sidebarController.refreshTree()
+        }
+        var recent = UserDefaults.standard.array(forKey: "recentItems") as? [[String: String]] ?? []
+        recent.removeAll { $0["path"] == source.path }; UserDefaults.standard.set(recent, forKey: "recentItems")
+    }
+    func deleteSidebarFile(_ suppliedURL: URL) {
+        let alert = NSAlert(); alert.messageText = "Delete File?"
+        alert.informativeText = "Are you sure you want to move ‘\(suppliedURL.lastPathComponent)’ to Trash? Open copies will be kept as unsaved documents."
+        alert.addButton(withTitle: "Cancel"); alert.addButton(withTitle: "Move to Trash")
+        guard alert.runModal() == .alertSecondButtonReturn else { return }
+        do { try deleteSidebarFile(suppliedURL, confirmed: true) } catch { report(error) }
+    }
+    func deleteSidebarFile(_ suppliedURL: URL, confirmed: Bool, trash: ((URL) throws -> Void)? = nil) throws {
+        guard confirmed else { return }
+        let source = suppliedURL.workspaceNormalizedURL
+        guard (try? source.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) != true else { throw CocoaError(.fileWriteNoPermission) }
+        let peers = ([self] + ([delegate] + delegate.additionalWindows).filter { $0 !== self }).filter { !$0.windowClosed && !$0.documents.isEmpty }
+        for controller in peers {
+            controller.captureDocument(); try controller.saveCurrentSessionBeforeSwitch()
+            for document in controller.documents where document.path.map({ URL(fileURLWithPath: $0).workspaceNormalizedURL.path }) == source.path { try controller.store.archive(document) }
+        }
+        if let trash { try trash(source) } else { try FileManager.default.trashItem(at: source, resultingItemURL: nil) }
+        for controller in peers {
+            for index in controller.documents.indices where controller.documents[index].path.map({ URL(fileURLWithPath: $0).workspaceNormalizedURL.path }) == source.path {
+                controller.documents[index].path = nil; controller.documents[index].diskChanged = true
+            }
+            controller.rebuildTabs(); controller.highlight(); controller.sidebarController.refreshTree()
+        }
+        for controller in peers {
+            try controller.saveCurrentSessionBeforeSwitch()
+            try controller.detachDeletedRecovery(in: controller.store.directory, deleted: source)
+        }
+        var recent = UserDefaults.standard.array(forKey: "recentItems") as? [[String: String]] ?? []
+        recent.removeAll { $0["path"] == source.path }; UserDefaults.standard.set(recent, forKey: "recentItems")
+    }
+    func detachDeletedRecovery(in root: URL, deleted: URL) throws {
+        guard let files = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil) else { return }
+        for case let file as URL in files where file.pathExtension == "json" && !file.lastPathComponent.contains(".corrupt-") {
+            guard let data = try? Data(contentsOf: file), var record = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { continue }
+            var changed = false
+            func update(_ original: [String: Any]) -> [String: Any] {
+                var document = original
+                if let path = document["path"] as? String, URL(fileURLWithPath: path).workspaceNormalizedURL.path == deleted.path {
+                    document["path"] = NSNull(); document["diskChanged"] = true; changed = true
+                }
+                return document
+            }
+            if let documents = record["documents"] as? [[String: Any]] { record["documents"] = documents.map(update) } else { record = update(record) }
+            if changed { try JSONSerialization.data(withJSONObject: record, options: [.sortedKeys]).write(to: file, options: .atomic) }
+        }
     }
     @objc func renameTab(_ sender: NSMenuItem) {
         guard let text = sender.representedObject as? String, let id = UUID(uuidString: text), let index = documents.firstIndex(where: { $0.id == id }) else { return }

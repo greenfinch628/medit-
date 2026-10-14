@@ -57,6 +57,17 @@ func runSelfTests() {
         let color = d.editor.layoutManager!.temporaryAttribute(.foregroundColor, atCharacterIndex: 0, effectiveRange: &range)
         check(color != nil && d.language.stringValue == "Swift", "Syntax colors use temporary attributes and detect file type")
         check(d.editor.string == "let value = 42 // comment", "Highlighting leaves document contents untouched")
+        let syntaxDocuments = d.documents
+        d.documents = [EditorDocument(title: "Untitled Document 1")]
+        d.editor.string = ""
+        d.editor.typingAttributes[.foregroundColor] = NSColor.systemPink
+        d.highlight()
+        check((d.editor.typingAttributes[.foregroundColor] as? NSColor)?.hexString == NSColor.black.hexString, "Empty untitled document resets inherited typing color to black")
+        d.editor.insertText("plain text", replacementRange: NSRange(location: 0, length: 0))
+        d.highlight()
+        check((d.editor.textStorage?.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor)?.hexString == NSColor.black.hexString, "Typing in untitled document stays black before switching tabs")
+        check(d.editor.layoutManager!.temporaryAttribute(.foregroundColor, atCharacterIndex: 0, effectiveRange: nil) == nil, "Untitled plain text has no syntax color")
+        d.documents = syntaxDocuments; d.editor.string = syntaxDocuments[0].text; d.highlight()
         let correctionView = BlockTextView(frame: NSRect(x: 0, y: 0, width: 400, height: 200)); correctionView.isRichText = false; correctionView.allowsUndo = true; correctionView.string = "hello speling"
         let correction = NSMenuItem(title: "spelling", action: nil, keyEquivalent: "")
         correction.representedObject = ["range": NSValue(range: NSRange(location: 6, length: 7)), "original": "speling", "replacement": "spelling"]
@@ -204,6 +215,24 @@ func runSelfTests() {
         let namedDraft = root.appendingPathComponent("new named draft.txt")
         let namedDraftText = try String(contentsOf: namedDraft)
         check(namedDraftText == "new named draft 🐦" && !controller.documents[controller.activeIndex].dirty && controller.documents[controller.activeIndex].path == namedDraft.path, "Naming an untitled document saves it in the sidebar folder")
+        let sidebarSource = root.appendingPathComponent("sidebar-closed.txt")
+        try "sidebar disk".write(to: sidebarSource, atomically: true, encoding: .utf8)
+        let sidebarCount = controller.documents.count
+        try controller.renameSidebarFile(sidebarSource, to: "sidebar-renamed.txt")
+        let sidebarTarget = root.appendingPathComponent("sidebar-renamed.txt")
+        check(FileManager.default.fileExists(atPath: sidebarTarget.path) && !FileManager.default.fileExists(atPath: sidebarSource.path) && controller.documents.count == sidebarCount, "Sidebar renames a closed file without opening a tab")
+        try controller.deleteSidebarFile(sidebarTarget, confirmed: false)
+        check(FileManager.default.fileExists(atPath: sidebarTarget.path), "Cancelling sidebar Delete leaves file intact")
+        controller.openFile(sidebarTarget); controller.editor.string = "unsaved sidebar edit"; controller.captureDocument()
+        var failedTrash = false
+        do { try controller.deleteSidebarFile(sidebarTarget, confirmed: true, trash: { _ in throw CocoaError(.fileWriteNoPermission) }) } catch { failedTrash = true }
+        check(failedTrash && FileManager.default.fileExists(atPath: sidebarTarget.path) && controller.documents[controller.activeIndex].path == sidebarTarget.path, "Trash failure preserves file and tab identity")
+        let trashFixture = root.appendingPathComponent("trash-fixture.txt")
+        try controller.deleteSidebarFile(sidebarTarget, confirmed: true, trash: { try FileManager.default.moveItem(at: $0, to: trashFixture) })
+        let trashedText = try String(contentsOf: trashFixture)
+        check(!FileManager.default.fileExists(atPath: sidebarTarget.path) && trashedText == "sidebar disk" && controller.documents[controller.activeIndex].path == nil && controller.documents[controller.activeIndex].dirty && controller.editor.string == "unsaved sidebar edit", "Confirmed Delete preserves disk copy in Trash and open edits as unsaved")
+        let deletedSnapshot = try controller.store.load()!
+        check(deletedSnapshot.documents.contains { $0.path == nil && $0.text == "unsaved sidebar edit" }, "Deleted file edits remain in recovery without recreating the old path")
         controller.closeFolder()
         controller.recoveryTimer?.invalidate()
         defer { controller.window.orderOut(nil) }
@@ -233,7 +262,12 @@ func runSelfTests() {
         controller.openFolder(root)
         check(controller.documents.map(\.id) == firstIDs, "Reopening active folder does not reset or duplicate tabs")
         check(controller.documents.first { $0.id == fileID }?.pinned == true, "Folder switching restores pinned tabs")
-        controller.closeFolder()
+        let folderMenu = controller.sidebarController.makeFolderMenu()!
+        check(folderMenu.items.map(\.title) == ["Close Folder"], "Folder title context menu offers Close Folder")
+        let folderAction = folderMenu.items[0]
+        _ = NSApp.sendAction(folderAction.action!, to: folderAction.target, from: folderAction)
+        check(!controller.sidebarItem.isCollapsed && controller.sidebarController.root == nil && controller.sidebarController.outline.numberOfRows == 0, "Folder title Close Folder leaves sidebar visible and empty")
+        check(controller.sidebarController.makeFolderMenu() == nil, "Empty sidebar has no folder close menu")
         check(controller.workspace == nil && controller.editor.string == "loose unsaved draft", "Closing folder restores loose draft session")
         let closeItem = NSMenuItem(title: "Close Folder", action: #selector(AppDelegate.closeFolder), keyEquivalent: "")
         check(!controller.validateMenuItem(closeItem), "Close Folder disabled without a folder")
@@ -367,7 +401,7 @@ func runSelfTests() {
         UserDefaults.standard.set(oldGitPreference, forKey: "showGitStatus")
         controller.gitTimer?.invalidate()
         let iconURL = Bundle.main.url(forResource: "AppIcon", withExtension: "icns")
-        check(iconURL.flatMap { NSImage(contentsOf: $0) }?.isValid == true, "Packaged blue-plus application icon decodes correctly")
+        check(iconURL.flatMap { NSImage(contentsOf: $0) }?.isValid == true, "Packaged application icon decodes correctly")
         print("\(checks) checks passed")
         UserDefaults.standard.set(oldRecent, forKey: "recentItems")
         UserDefaults.standard.set(oldGitPreference, forKey: "showGitStatus")

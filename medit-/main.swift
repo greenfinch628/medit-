@@ -137,8 +137,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         let editorPane = NSView()
         [tabs, documentHost].forEach { editorPane.addSubview($0); $0.translatesAutoresizingMaskIntoConstraints = false }
         let editorController = NSViewController(); editorController.view = editorPane
+        sidebarController.onCloseFolder = { [weak self] in self?.closeFolder() }
         sidebarController.onHide = { [weak self] in self?.toggleWorkspaceSidebar() }
         sidebarController.onOpenFile = { [weak self] url in self?.openFile(url) }
+        sidebarController.onRenameFile = { [weak self] url in self?.renameSidebarFile(url) }
+        sidebarController.onDeleteFile = { [weak self] url in self?.deleteSidebarFile(url) }
         sidebarItem = NSSplitViewItem(viewController: sidebarController)
         sidebarItem.minimumThickness = 160; sidebarItem.maximumThickness = CGFloat.greatestFiniteMagnitude; sidebarItem.canCollapse = true
         workspaceSplit.splitView.isVertical = true; workspaceSplit.splitView.dividerStyle = .thin
