@@ -6,6 +6,19 @@ Built for macOS with Swift and AppKit, nex-editm follows the familiar gedit layo
 
 ![nex-editm on macOS with folder sidebar and Swift syntax highlighting](assets/screenshots/nex-editm.png)
 
+## Project status and support
+
+nex-editm is provided **as is, without warranty**. **No technical support is
+provided.** There is no commitment to ongoing maintenance, updates, or
+compatibility with future operating system or dependency versions.
+
+Bug reports, enhancement requests, and proposed fixes or improvements are
+welcome through this project's [GitHub repository](https://github.com/greenfinch628/nex-editm)
+or [Gitea repository](http://scopuli:3000/scopuli/nex-editm) and will be considered
+at the maintainer's discretion. Submitting a report, request, or contribution
+does not guarantee a response, investigation, acceptance, fix, or implementation.
+No release or completion date is promised.
+
 ## Features
 
 - Open files and folders, browse recent items, and work in multiple windows.
