@@ -25,6 +25,9 @@ Built for macOS with Swift and AppKit, nex-editm follows the familiar gedit layo
 
 ## Build and try
 
+For the convenient clone/build/install workflow, see [Build from source](SOURCE-INSTALL.md).
+
+
 Requires macOS 13 or later and Xcode with Swift 5.9 or later. Run these commands from the repository checkout. They discover the existing Xcode project and scheme, then build an application named **nex-editm**. Xcode resolves the pinned HighlighterSwift 3.1.0 dependency on the first build.
 
 ```sh
