@@ -4,6 +4,8 @@ A simple text editor inspired by GNOME gedit that is pleasant to use.
 
 Built for macOS with Swift and AppKit, medit- follows the familiar gedit layout while keeping native Mac window controls, file dialogs and Command shortcuts. Its companion, [gedit-](https://github.com/greenfinch628/gedit-), brings the same approach to Fedora. This is an independent development project, not an official GNOME or gedit release.
 
+![nex-editm on macOS with folder sidebar and Swift syntax highlighting](assets/screenshots/nex-editm.png)
+
 ## Features
 
 - Open files and folders, browse recent items, and work in multiple windows.

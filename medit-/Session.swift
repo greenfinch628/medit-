@@ -298,7 +298,7 @@ extension AppDelegate {
     }
     @objc func showAppMenu(_ sender: NSButton) {
         let menu = NSMenu()
-        for (title, action) in [("Preferences…", #selector(showSettings)), ("Help", #selector(columnHelp)), ("About medit-", #selector(showAbout))] {
+        for (title, action) in [("Preferences…", #selector(showSettings)), ("Help", #selector(columnHelp)), ("About nex-editm", #selector(showAbout))] {
             menu.addItem(withTitle: title, action: action, keyEquivalent: "").target = self
         }
         menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.maxY), in: sender)
@@ -310,7 +310,7 @@ extension AppDelegate {
         }
     }
     @objc func showAbout() {
-        var options: [NSApplication.AboutPanelOptionKey: Any] = [.applicationName: "medit-"]
+        var options: [NSApplication.AboutPanelOptionKey: Any] = [.applicationName: "nex-editm"]
         if let url = Bundle.main.url(forResource: "AppIcon", withExtension: "icns"), let icon = NSImage(contentsOf: url) { options[.applicationIcon] = icon }
         NSApp.orderFrontStandardAboutPanel(options: options)
     }
@@ -389,7 +389,7 @@ extension AppDelegate {
     @objc func showSettings() {
         if let settingsWindow { settingsWindow.makeKeyAndOrderFront(nil); return }
         let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 570, height: 440), styleMask: [.titled, .closable], backing: .buffered, defer: false)
-        w.title = "medit- Preferences"; w.isReleasedWhenClosed = false
+        w.title = "nex-editm Preferences"; w.isReleasedWhenClosed = false
         let tabs = NSTabView(frame: NSRect(x: 16, y: 16, width: 538, height: 408)); tabs.autoresizingMask = [.width, .height]
         let d = UserDefaults.standard
         for title in ["Fonts", "Editing", "Appearance", "Spelling"] {

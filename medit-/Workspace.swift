@@ -281,7 +281,7 @@ extension AppDelegate {
     func applicationDidBecomeActive(_ notification: Notification) { if window != nil { sidebarController.updateGitPreference(); if workspace != nil { sidebarController.refreshTree() } } }
     func updateWorkspaceTitle() {
         let name = workspace.map { URL(fileURLWithPath: $0).lastPathComponent }
-        window.title = name.map { "medit- — \($0)" } ?? "medit-"
+        window.title = name.map { "nex-editm — \($0)" } ?? "nex-editm"
         window.representedURL = workspace.map { URL(fileURLWithPath: $0) }
     }
     func sessionSnapshot() -> EditorSession {

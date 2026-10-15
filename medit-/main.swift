@@ -91,7 +91,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         if let url = Bundle.main.url(forResource: "AppIcon", withExtension: "icns"), let icon = NSImage(contentsOf: url) { NSApp.applicationIconImage = icon }
         buildMenu()
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1060, height: 720), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
-        window.delegate = self; window.setFrameAutosaveName("MainWindow"); window.title = "medit-"; window.titlebarAppearsTransparent = true; window.backgroundColor = EditorPalette.titleBar; window.minSize = NSSize(width: 640, height: 400)
+        window.delegate = self; window.setFrameAutosaveName("MainWindow"); window.title = "nex-editm"; window.titlebarAppearsTransparent = true; window.backgroundColor = EditorPalette.titleBar; window.minSize = NSSize(width: 640, height: 400)
         let rootController = NSViewController(); let root = NSView(frame: NSRect(x: 0, y: 0, width: 1060, height: 720)); rootController.view = root; window.contentViewController = rootController
         let header = NSView(); header.wantsLayer = true; header.layer?.backgroundColor = EditorPalette.header.cgColor
         let open = button("Open", symbol: "folder"); let arrow = button("", symbol: "chevron.down"); let new = button("", symbol: "doc.badge.plus"); new.toolTip = "New Tab"; new.setAccessibilityLabel("New Tab")
@@ -206,13 +206,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
     }
     func buildMenu() {
         let main = NSMenu(); let appItem = NSMenuItem(); main.addItem(appItem)
-        let appMenu = NSMenu(); appMenu.addItem(withTitle: "Quit medit-", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"); appItem.submenu = appMenu
+        let appMenu = NSMenu(); appMenu.addItem(withTitle: "Quit nex-editm", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"); appItem.submenu = appMenu
         let editItem = NSMenuItem(title: "Edit", action: nil, keyEquivalent: ""); main.addItem(editItem); let edit = NSMenu(title: "Edit"); editItem.submenu = edit
         for (title, action, key) in [("Cut", "cut:", "x"), ("Copy", "copy:", "c"), ("Paste", "paste:", "v"), ("Select All", "selectAll:", "a")] { edit.addItem(withTitle: title, action: Selector(action), keyEquivalent: key) }
         let undo = edit.insertItem(withTitle: "Undo", action: #selector(undoEdit), keyEquivalent: "z", at: 0); undo.target = self
         let redo = edit.insertItem(withTitle: "Redo", action: #selector(redoEdit), keyEquivalent: "z", at: 1); redo.target = self; redo.keyEquivalentModifierMask = [.command, .shift]
-        appMenu.insertItem(withTitle: "About medit-", action: #selector(showAbout), keyEquivalent: "", at: 0).target = self
-        appMenu.insertItem(withTitle: "Hide medit-", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h", at: 1)
+        appMenu.insertItem(withTitle: "About nex-editm", action: #selector(showAbout), keyEquivalent: "", at: 0).target = self
+        appMenu.insertItem(withTitle: "Hide nex-editm", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h", at: 1)
         let hideOthers = appMenu.insertItem(withTitle: "Hide Others", action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h", at: 2); hideOthers.keyEquivalentModifierMask = [.command, .option]
         appMenu.insertItem(withTitle: "Show All", action: #selector(NSApplication.unhideAllApplications(_:)), keyEquivalent: "", at: 3)
         appMenu.insertItem(withTitle: "Preferences…", action: #selector(showSettings), keyEquivalent: ",", at: 0).target = self
