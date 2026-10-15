@@ -1,8 +1,8 @@
-# medit-
+# nex-editm
 
 A simple text editor inspired by GNOME gedit that is pleasant to use.
 
-Built for macOS with Swift and AppKit, medit- follows the familiar gedit layout while keeping native Mac window controls, file dialogs and Command shortcuts. Its companion, [gedit-](https://github.com/greenfinch628/gedit-), brings the same approach to Fedora. This is an independent development project, not an official GNOME or gedit release.
+Built for macOS with Swift and AppKit, nex-editm follows the familiar gedit layout while keeping native Mac window controls, file dialogs and Command shortcuts. Its companion, [nex-editg](https://github.com/greenfinch628/nex-editg), brings the same approach to Fedora. This is an independent development project, not an official GNOME or gedit release.
 
 ![nex-editm on macOS with folder sidebar and Swift syntax highlighting](assets/screenshots/nex-editm.png)
 
@@ -25,32 +25,31 @@ Built for macOS with Swift and AppKit, medit- follows the familiar gedit layout 
 
 ## Build and try
 
-Requires macOS 13 or later and Xcode with Swift 5.9 or later. Open `medit-.xcodeproj`, select the `medit-` scheme, then Run with **Command+R**. Xcode resolves the pinned HighlighterSwift 3.1.0 dependency on the first build.
-
-To build a separate review application while preserving the installed medit- and its data:
+Requires macOS 13 or later and Xcode with Swift 5.9 or later. Run these commands from the repository checkout. They discover the existing Xcode project and scheme, then build an application named **nex-editm**. Xcode resolves the pinned HighlighterSwift 3.1.0 dependency on the first build.
 
 ```sh
-xcodebuild -project medit-.xcodeproj -scheme medit- \
+cd "$HOME/XcodeProjects/nex-editm"
+project=$(find . -maxdepth 1 -name '*.xcodeproj' -print -quit)
+scheme=$(basename "$project" .xcodeproj)
+xcodebuild -project "$project" -scheme "$scheme" \
   -configuration Release -derivedDataPath build/review-next \
-  CODE_SIGNING_ALLOWED=NO \
+  CODE_SIGNING_ALLOWED=NO PRODUCT_NAME=nex-editm \
   PRODUCT_BUNDLE_IDENTIFIER=com.greenfinch628.medit.review build
-ditto build/review-next/Build/Products/Release/medit-.app \
-  "$HOME/Applications/medit-next.app"
-open "$HOME/Applications/medit-next.app"
+open build/review-next/Build/Products/Release/nex-editm.app
 ```
 
-The review build uses an independent application identity and recovery directory. The installed `~/Applications/medit-.app` remains unchanged. This local development build is not notarized and does not require a signing account.
-
-For a normal development build using the medit- identity:
+To install that build for everyday use:
 
 ```sh
-xcodebuild -project medit-.xcodeproj -scheme medit- \
-  -configuration Debug -derivedDataPath build \
-  CODE_SIGNING_ALLOWED=NO build
-open build/Build/Products/Debug/medit-.app
+mkdir -p "$HOME/Applications"
+ditto build/review-next/Build/Products/Release/nex-editm.app \
+  "$HOME/Applications/nex-editm.app"
+open "$HOME/Applications/nex-editm.app"
 ```
 
-That normal build shares the existing medit- preferences and recovery data. Use the review build for isolated testing.
+Quit any running copy before opening the newly built application. The bundle identifier above deliberately retains the existing review identity, so this build uses your current review preferences and recovered sessions. Install one application copy for everyday use to avoid duplicate entries in Apps.
+
+For development in Xcode, open the discovered project and select its existing scheme, then Run with **Command+R**. The default scheme uses a separate development identity and recovery directory; use the command above to continue with the review identity. This local build is not notarized and does not require a signing account.
 
 ## Rectangular selection and column copy/cut/paste
 
@@ -93,7 +92,7 @@ By default, closing or quitting preserves unsaved text without asking to save. E
 
 Recovery snapshots are written atomically on edits and periodically, with a previous snapshot retained. Corrupt snapshots are preserved and the previous copy is used when available. Recovery preserves edits without writing them to original documents. Clean saved tabs reload disk contents; modified tabs restore recovery contents, and saving warns if the original changed externally. Missing folders report an error without discarding documents.
 
-Normal medit- recovery lives in `~/Library/Application Support/medit-/`. The separate review build uses `~/Library/Application Support/medit-next-review/` and independent preferences. Recovery and archives are local, unencrypted text. A sudden shutdown can lose edits made after the most recent snapshot.
+Recovery lives in the existing application-specific folders under `~/Library/Application Support/`. The development and review identities use separate recovery directories and preferences. These storage names are retained for compatibility with existing sessions. Recovery and archives are local, unencrypted text. A sudden shutdown can lose edits made after the most recent snapshot.
 
 UTF-8, UTF-16, Windows-1252 and Mac Roman are among the detected encodings. Existing files retain their detected encoding when saved; new files and Save As use UTF-8. Existing newline contents are preserved. Ambiguous encoding detection can differ from Fedora. Binary files are not supported.
 
@@ -102,25 +101,25 @@ UTF-8, UTF-16, Windows-1252 and Mac Roman are among the detected encodings. Exis
 For the separate review build:
 
 ```sh
-build/review-next/Build/Products/Release/medit-.app/Contents/MacOS/medit- --self-test
+build/review-next/Build/Products/Release/nex-editm.app/Contents/MacOS/nex-editm --self-test
 ```
 
 The current executable checks cover Unicode recovery, modified originals, closed-tab archives, corrupt snapshot fallback, folder sessions, pinned tabs, colors, spelling, highlighting, Git status, block replacement, repeated column typing, multiline block paste, short-row padding and Welcome behavior. The current review build passes 136 checks. Option-drag geometry and complex Unicode column alignment still benefit from hands-on testing.
 
-Use `--session-directory /tmp/medit-review` to isolate recovery for a test run. `--preview /tmp/medit.png` captures the application's own content and exits.
+Use `--session-directory /tmp/nex-editm-review` to isolate recovery for a test run. `--preview /tmp/nex-editm.png` captures the application's own content and exits.
 
 ## Source and dependencies
 
 This is an independent AppKit implementation, rather than a patch to upstream gedit. HighlighterSwift is pinned to 3.1.0; dependencies retain their respective license terms. Build output, local preferences, recovery fixtures and backups are excluded from Git.
 
-Application sources are under `medit-/`: `main.swift` handles the window and lifecycle, `Session.swift` documents and recovery, `BlockTextView.swift` rectangular editing, `Workspace.swift` the folder browser, and `SelfTests.swift` executable checks. [Examples/Welcome.swift](Examples/Welcome.swift) is bundled with the application.
+The application source directory contains these Swift files: `main.swift` handles the window and lifecycle, `Session.swift` documents and recovery, `BlockTextView.swift` rectangular editing, `Workspace.swift` the folder browser, and `SelfTests.swift` executable checks. [Examples/Welcome.swift](Examples/Welcome.swift) is bundled with the application.
 
 ## Repositories
 
-Source: [GitHub](https://github.com/greenfinch628/medit-) and [Scopuli Gitea](http://scopuli:3000/scopuli/medit-). Development branch: `main`; remotes are `github` for GitHub and `origin` for Gitea.
+Source: [GitHub](https://github.com/greenfinch628/nex-editm) and [Scopuli Gitea](http://scopuli:3000/scopuli/nex-editm). Development branch: `main`; remotes are `github` for GitHub and `origin` for Gitea.
 
-Related projects: [gedit- for Fedora](https://github.com/greenfinch628/gedit-) and [gedit-legacy](https://github.com/greenfinch628/gedit-legacy).
+Related projects: [nex-editg for Fedora](https://github.com/greenfinch628/nex-editg).
 
 ## Binary packages
 
-The current review application is built locally with Xcode. No notarized public installer is provided by this workflow. Fedora RPM and Ubuntu DEB packaging belongs to the separate gedit- project; legacy packages do not contain these new editors.
+The current review application is built locally with Xcode. No notarized public installer is provided by this workflow. Fedora RPM and Ubuntu DEB packaging belongs to the separate nex-editg project; legacy packages do not contain these new editors.
