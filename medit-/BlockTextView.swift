@@ -40,12 +40,27 @@ final class BlockTextView: NSTextView {
         let width = ("M" as NSString).size(withAttributes: [.font: font ?? NSFont.monospacedSystemFont(ofSize: 16, weight: .regular)]).width
         return (row, max(0, Int(((point.x - textContainerInset.width - (textContainer?.lineFragmentPadding ?? 0)) / width).rounded())))
     }
+    /// Use the glyph under the pointer rather than the nearest insertion boundary.
+    func spellingRange(at point: NSPoint) -> NSRange? {
+        guard let layout = layoutManager, let container = textContainer else { return nil }
+        layout.ensureLayout(for: container)
+        guard layout.numberOfGlyphs > 0 else { return nil }
+        let origin = textContainerOrigin
+        let location = NSPoint(x: point.x - origin.x, y: point.y - origin.y)
+        let glyph = layout.glyphIndex(for: location, in: container, fractionOfDistanceThroughGlyph: nil)
+        guard glyph < layout.numberOfGlyphs else { return nil }
+        let bounds = layout.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: container)
+        guard bounds.contains(location) else { return nil }
+        let character = layout.characterIndexForGlyph(at: glyph)
+        return spellingRanges.first { NSLocationInRange(character, $0) }
+    }
+
     override func mouseDown(with event: NSEvent) {
         guard event.modifierFlags.contains(.option) else {
             blockRanges = []; anchor = nil
-            let position = characterIndexForInsertion(at: convert(event.locationInWindow, from: nil))
+            let clickedRange = spellingRange(at: convert(event.locationInWindow, from: nil))
             super.mouseDown(with: event)
-            if event.clickCount == 1, event.modifierFlags.intersection([.command, .control, .shift, .option]).isEmpty, selectedRange().length == 0, let range = spellingRanges.first(where: { NSLocationInRange(position, $0) }) {
+            if event.clickCount == 1, event.modifierFlags.intersection([.command, .control, .shift, .option]).isEmpty, selectedRange().length == 0, let range = clickedRange {
                 showSpellingMenu(range, event: event)
             }
             return

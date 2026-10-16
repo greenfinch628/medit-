@@ -69,6 +69,32 @@ func runSelfTests() {
         check(d.editor.layoutManager!.temporaryAttribute(.foregroundColor, atCharacterIndex: 0, effectiveRange: nil) == nil, "Untitled plain text has no syntax color")
         d.documents = syntaxDocuments; d.editor.string = syntaxDocuments[0].text; d.highlight()
         let correctionView = BlockTextView(frame: NSRect(x: 0, y: 0, width: 400, height: 200)); correctionView.isRichText = false; correctionView.allowsUndo = true; correctionView.string = "hello speling"
+        correctionView.font = NSFont.monospacedSystemFont(ofSize: 16, weight: .regular)
+        for prefix in ["hello ", "café 🐦 ", ""] {
+            correctionView.string = prefix + "speling tail\n"
+            let misspelled = (correctionView.string as NSString).range(of: "speling")
+            correctionView.spellingRanges = [misspelled]
+            let layout = correctionView.layoutManager!, container = correctionView.textContainer!
+            layout.ensureLayout(for: container)
+            func glyphBounds(_ character: Int) -> NSRect {
+                let glyph = layout.glyphIndexForCharacter(at: character)
+                var bounds = layout.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: container)
+                bounds.origin.x += correctionView.textContainerOrigin.x
+                bounds.origin.y += correctionView.textContainerOrigin.y
+                return bounds
+            }
+            let first = glyphBounds(misspelled.location), last = glyphBounds(NSMaxRange(misspelled) - 1)
+            for bounds in [first, last] {
+                for fraction in [0.1, 0.9] {
+                    let point = NSPoint(x: bounds.minX + bounds.width * fraction, y: bounds.midY)
+                    check(correctionView.spellingRange(at: point) == misspelled, "Spelling hit-test includes both halves of edge letters with Unicode prefixes")
+                }
+            }
+            check(correctionView.spellingRange(at: NSPoint(x: first.minX - 1, y: first.midY)) == nil, "Click just before word does not offer spelling suggestions")
+            check(correctionView.spellingRange(at: NSPoint(x: last.maxX + 1, y: last.midY)) == nil, "Click just after word does not offer spelling suggestions")
+            check(correctionView.spellingRange(at: NSPoint(x: last.maxX + 150, y: last.midY)) == nil, "Click in trailing blank space does not offer spelling suggestions")
+        }
+        correctionView.string = "hello speling"
         let correction = NSMenuItem(title: "spelling", action: nil, keyEquivalent: "")
         correction.representedObject = ["range": NSValue(range: NSRange(location: 6, length: 7)), "original": "speling", "replacement": "spelling"]
         correctionView.correctSpelling(correction); check(correctionView.string == "hello spelling", "Spelling suggestion replaces only the clicked word")
