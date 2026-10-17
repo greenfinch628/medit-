@@ -49,7 +49,7 @@ project=$(find . -maxdepth 1 -name '*.xcodeproj' -print -quit)
 scheme=$(basename "$project" .xcodeproj)
 xcodebuild -project "$project" -scheme "$scheme" \
   -configuration Release -derivedDataPath build/review-next \
-  CODE_SIGNING_ALLOWED=NO PRODUCT_NAME=nex-editm \
+  CODE_SIGNING_ALLOWED=NO \
   PRODUCT_BUNDLE_IDENTIFIER=com.greenfinch628.medit.review build
 open build/review-next/Build/Products/Release/nex-editm.app
 ```
@@ -120,7 +120,7 @@ For the separate review build:
 build/review-next/Build/Products/Release/nex-editm.app/Contents/MacOS/nex-editm --self-test
 ```
 
-The current executable checks cover Unicode recovery, modified originals, closed-tab archives, corrupt snapshot fallback, folder sessions, pinned tabs, colors, spelling, highlighting, Git status, block replacement, repeated column typing, multiline block paste, short-row padding and Welcome behavior. The current review build passes 136 checks. Option-drag geometry and complex Unicode column alignment still benefit from hands-on testing.
+The current executable checks cover Unicode recovery, modified originals, closed-tab archives, corrupt snapshot fallback, folder sessions, pinned tabs, colors, spelling, highlighting, Git status, block replacement, repeated column typing, multiline block paste, short-row padding and Welcome behavior. The current review build passes 157 checks. Option-drag geometry and complex Unicode column alignment still benefit from hands-on testing.
 
 Use `--session-directory /tmp/nex-editm-review` to isolate recovery for a test run. `--preview /tmp/nex-editm.png` captures the application's own content and exits.
 
@@ -132,7 +132,7 @@ The application source directory contains these Swift files: `main.swift` handle
 
 ## Repositories
 
-Source: [GitHub](https://github.com/greenfinch628/nex-editm) and [Scopuli Gitea](http://scopuli:3000/scopuli/nex-editm). Development branch: `main`; remotes are `github` for GitHub and `origin` for Gitea.
+Source: [GitHub](https://github.com/greenfinch628/nex-editm) and [Scopuli Gitea](http://scopuli:3000/scopuli/nex-editm). Development branch: `main`; remotes are `origin` for GitHub and `gitea` for Gitea.
 
 Related projects: [nex-editg for Fedora](https://github.com/greenfinch628/nex-editg).
 

@@ -48,7 +48,7 @@ def main():
     app = ROOT / 'build/source-install/Build/Products/Release/nex-editm.app'
     run('xcodebuild', '-project', ROOT / 'medit-.xcodeproj', '-scheme', 'medit-',
         '-configuration', 'Release', '-derivedDataPath', ROOT / 'build/source-install',
-        'CODE_SIGNING_ALLOWED=NO', 'PRODUCT_NAME=nex-editm',
+        'CODE_SIGNING_ALLOWED=NO',
         f'PRODUCT_BUNDLE_IDENTIFIER={BUNDLE_ID}', 'build')
     run('codesign', '--force', '--sign', '-', '--timestamp=none', app)
     if args.test:
